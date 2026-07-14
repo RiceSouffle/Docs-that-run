@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docsthatrun"
+version = "0.1.0"
+description = "Version-aware documentation RAG with execution-graded answers (Pydantic v1 -> v2)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []  # core is standard-library only
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.40"]
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+packages = ["docsthatrun", "docsthatrun.evals"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,0 +1,38 @@
+name: evals
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the pinned-version sandbox venvs
+        run: bash scripts/setup_sandbox.sh
+
+      - name: Install test + server deps
+        run: pip install -r requirements.txt
+
+      - name: Unit tests (retrieval + sandbox version-lock)
+        run: pytest -q
+
+      # Retrieval metrics are real; execution grading is real (venvs built above).
+      # The answer layer uses the offline MockClient so CI needs no API key.
+      - name: Eval gate
+        run: |
+          python -m docsthatrun.evals.run_evals --answers --gate \
+            --client mock --json results/ci-report.json
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: results/ci-report.json

@@ -1,0 +1,10 @@
+# Optional extras. The core (retrieval, sandbox, evals with MockClient) runs on
+# the Python standard library alone — no install needed.
+#
+# For the real answer layer:
+anthropic>=0.40
+# For the HTTP API:
+fastapi>=0.110
+uvicorn>=0.29
+# For tests:
+pytest>=8.0
