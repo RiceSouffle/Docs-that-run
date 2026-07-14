@@ -1,0 +1,84 @@
+# Design decisions
+
+Short record of *why* each choice was made and what it trades off. Written so a
+reviewer can interrogate any layer.
+
+## Why Pydantic v1 → v2
+
+The differentiator lives or dies on how many "how do I X" questions reduce to a
+**self-contained, runnable, assertable** snippet. Pydantic is close to ideal:
+almost every answer is 5–10 lines (`model_dump`, `field_validator`, `Field`,
+`Optional` defaults), and the v1→v2 migration is the canonical version-drift
+story. It's also widely known, so it reads instantly in an interview.
+
+## Why execution grading instead of an LLM judge (for code answers)
+
+The most common way to grade a RAG answer is an LLM-as-judge — which then needs
+its *own* validation against human labels or it's just noise. For **code**
+answers we can do something stronger and cheaper: run the code. A snippet that
+imports a removed API or asserts the wrong behavior fails deterministically. No
+judge to calibrate.
+
+The nuance, measured and reported honestly: **10/16 (62%)** of the golden checks
+are *crisply* version-locked (they fail on the other version). The rest aren't,
+because v2 kept some v1 methods as **deprecated shims** (`.dict()`, `.json()`,
+`.schema()` still run in v2). So execution grading catches "v2 answer on v1"
+crisply (removed names raise), but "v1 answer on v2" only when the API was truly
+removed (`BaseSettings` moved packages; `Optional` without a default became
+required; `field_validator`/`ConfigDict` don't exist in v1). This is a real
+finding, not a bug — and it's exactly the kind of failure-mode nuance the
+sandbox surfaces.
+
+Answers that *don't* reduce to a runnable check (conceptual "why" questions) are
+out of scope for v0 and are the natural place a **human-validated LLM judge**
+gets added next (see ROADMAP).
+
+## Why pure-Python BM25 + TF-IDF (and not a vector DB / embeddings)
+
+The default retriever has **zero dependencies** so the whole eval loop runs on a
+fresh clone with no install and no network. The honest tradeoff: BM25 and
+TF-IDF are *both lexical* — this is a strong baseline, not a true dense+sparse
+hybrid. The architecture is built for the upgrade: `retrieve.py` fuses two
+ranked channels with RRF, so dropping in a real sentence-transformer / Voyage /
+OpenAI embedder as the second channel is a one-class change and RRF then fuses
+genuine lexical + semantic signal. Documented rather than hidden.
+
+## Why a version filter *before* fusion
+
+A query is tagged with its target version; retrieval only considers chunks whose
+version is that target or `both`. This is what makes "a v2 answer never leaks
+into a v1 query" true at the retrieval layer, before generation. Enforced by a
+test (`test_version_filter_excludes_other_version`).
+
+## Why the corpus and golden set are hand-authored (and small)
+
+The critique that kills projects like this is a thin or fabricated golden set.
+So the seed set is **hand-written and every reference snippet is verified to run
+on its target version** (asserted in CI). It's deliberately small (18 chunks / 16
+questions) and honest about it: recall@5 = 1.0 reflects clean version separation
+on a curated corpus, not messy real docs. Growing the corpus from real Pydantic
+docs + GitHub issues (where version tagging is genuinely hard) is the headline
+next step, not a footnote.
+
+## Why a MockClient exists
+
+So the answer → sandbox → eval → CI pipeline runs with **no API key** (CI, or an
+offline laptop). It replays the golden answer key, so its executable-% is a
+*plumbing* signal, clearly labeled as such in the eval report and README — never
+presented as a quality number. Real quality comes from `--client anthropic`.
+
+## Why Claude with structured JSON output
+
+The answer contract (`answer` / `code` / `citations` / `abstained`) is enforced
+with `output_config.format` (JSON schema), so parsing never guesses. Citations
+are cross-checked against the retrieved ids and hallucinated ids are dropped
+(`answer._coerce`). Model defaults to `claude-opus-4-8` with adaptive thinking;
+overridable via `DOCSTHATRUN_MODEL` / `DOCSTHATRUN_EFFORT`.
+
+## Gate thresholds
+
+`GATE` in `run_evals.py` is the noise floor the committed data must clear
+(recall@5 ≥ 0.80, MRR ≥ 0.60, unanswerable abstention ≥ 0.80, over-abstention
+≤ 0.20, executable-% ≥ 0.60 when the sandbox is up). They're intentionally below
+the current numbers so a real regression trips the gate. Tighten as the corpus
+grows.
