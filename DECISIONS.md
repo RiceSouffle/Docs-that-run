@@ -19,7 +19,7 @@ answers we can do something stronger and cheaper: run the code. A snippet that
 imports a removed API or asserts the wrong behavior fails deterministically. No
 judge to calibrate.
 
-The nuance, measured and reported honestly: **10/16 (62%)** of the golden checks
+The nuance, measured and reported honestly: **17/25 (68%)** of the golden checks
 are *crisply* version-locked (they fail on the other version). The rest aren't,
 because v2 kept some v1 methods as **deprecated shims** (`.dict()`, `.json()`,
 `.schema()` still run in v2). So execution grading catches "v2 answer on v1"
@@ -54,7 +54,7 @@ test (`test_version_filter_excludes_other_version`).
 
 The critique that kills projects like this is a thin or fabricated golden set.
 So the seed set is **hand-written and every reference snippet is verified to run
-on its target version** (asserted in CI). It's deliberately small (18 chunks / 16
+on its target version** (asserted in CI). It's deliberately small (27 chunks / 25
 questions) and honest about it: recall@5 = 1.0 reflects clean version separation
 on a curated corpus, not messy real docs. Growing the corpus from real Pydantic
 docs + GitHub issues (where version tagging is genuinely hard) is the headline
@@ -74,6 +74,38 @@ with `output_config.format` (JSON schema), so parsing never guesses. Citations
 are cross-checked against the retrieved ids and hallucinated ids are dropped
 (`answer._coerce`). Model defaults to `claude-opus-4-8` with adaptive thinking;
 overridable via `DOCSTHATRUN_MODEL` / `DOCSTHATRUN_EFFORT`.
+
+## Robustness & hardening
+
+A pass over the code (adversarially verified — each candidate bug had to survive
+a "try to refute this" review before it counted) surfaced a handful of real
+defects, now fixed and pinned by regression tests:
+
+- **The sandbox now bounds *total* execution, not just the direct child.**
+  `subprocess.run(..., timeout=)` only SIGKILLs the immediate process on timeout,
+  so a snippet that spawns a grandchild (`subprocess.Popen`, a fork) could orphan
+  it and escape the timeout. The grader now runs each snippet in its own session
+  (`start_new_session=True`) and `os.killpg`s the whole group on timeout. A
+  regression test spawns a grandchild and asserts it's dead after the deadline.
+- **The answer path degrades to an abstain instead of crashing.** The Anthropic
+  client shares its `max_tokens` budget between adaptive thinking and the JSON
+  answer, so a hard question can return `stop_reason == "max_tokens"` with a
+  truncated (or empty) body. Feeding that to `json.loads` used to 500 the
+  request. Parsing now tolerates truncated / empty / fenced / non-JSON output and
+  falls back to a clean abstain, surfacing the stop reason for observability.
+- **`sandbox_available` checks that pydantic actually imports**, not just that
+  `bin/python` exists — an interrupted `setup_sandbox.sh` leaves a venv with no
+  package, which would otherwise mislabel every answer as a quality failure.
+- **The CI gate no longer silently passes when nothing is gradable.** If the
+  sandbox is up but every answer abstained or produced no code, `executable_pct`
+  is `None`; the old guard skipped the check, so a total collapse looked like a
+  pass. It's now an explicit gate failure.
+- **API inputs are bounded** (`top_k` constrained; unknown versions 400) and
+  generation failures return a clean `502` rather than leaking a stack trace.
+
+None of these are exotic — they're the ordinary edges (timeouts, truncated model
+output, half-built environments, empty result sets) that a demo skips and a real
+system can't. Surfacing and fixing them, with tests, is the point.
 
 ## Gate thresholds
 

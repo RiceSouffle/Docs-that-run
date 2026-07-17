@@ -1,0 +1,14 @@
+# Run the DocsThatRun demo:  docker compose up --build
+# Then open http://localhost:8000
+#
+# By default it serves with the offline MockClient (no key needed). To get real
+# Claude answers, put ANTHROPIC_API_KEY in a .env file next to this compose file.
+services:
+  docsthatrun:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Passed through if set in your shell / .env; empty is fine (MockClient).
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DOCSTHATRUN_LLM=${DOCSTHATRUN_LLM:-auto}

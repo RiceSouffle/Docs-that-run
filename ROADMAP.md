@@ -6,12 +6,26 @@ turns it into a portfolio anchor is depth and *honest real-world numbers*. The
 order below is deliberate — each step closes a specific gap a skeptical
 interviewer would probe.
 
+### Shipped since v0
+- **Interactive demo UI** (`app/static/index.html`) + **terminal CLI**
+  (`docsthatrun ask` / `compare`) + **`/compare` endpoint** — the version-lock is
+  now something you can see, not just read about.
+- **Failure taxonomy + per-query latency** in the eval report (part of Milestone 1).
+- **Containerized** (`Dockerfile` / `docker-compose.yml`): API + both sandboxes
+  in one image, works offline.
+- **Robustness pass** (see DECISIONS.md → Robustness & hardening): sandbox
+  process-group isolation, graceful degradation on truncated/empty model output,
+  a stricter CI gate, bounded API inputs — all pinned by regression tests.
+
 ### Milestone 1 — Real Claude measurement (highest leverage)
 - Run `--client anthropic` over the golden set and publish Claude's true
   executable-%, abstention, and over-abstention (not the MockClient plumbing
   numbers). Add a `results/` snapshot to the README.
-- Add a per-item failure taxonomy: retrieval miss vs wrong-version API vs
-  malformed code vs wrong assert. Show one fix that moved the number.
+- ✅ Add a per-item failure taxonomy: retrieval miss vs wrong-version API vs
+  malformed code vs wrong assert. *(Done — the taxonomy is in the eval report;
+  with the MockClient every item is `pass`, so the interesting split appears once
+  Claude's real failures are measured.)* Still to do: show one fix that moved the
+  number.
 
 ### Milestone 2 — Real, messy corpus
 - Replace the 18 hand-written chunks with ingested Pydantic docs for one v1 and

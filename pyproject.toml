@@ -13,7 +13,10 @@ dependencies = []  # core is standard-library only
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
 server = ["fastapi>=0.110", "uvicorn>=0.29"]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+docsthatrun = "docsthatrun.cli:main"
 
 [tool.setuptools]
 packages = ["docsthatrun", "docsthatrun.evals"]

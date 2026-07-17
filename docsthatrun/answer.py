@@ -60,6 +60,28 @@ class AnswerResult:
             "question": self.question,
             "version": self.version,
             "retrieved_ids": [r.chunk.id for r in self.retrieved],
+            # Richer per-chunk retrieval detail so a UI can show *why* each chunk
+            # surfaced (fused score + the per-channel ranks). `retrieved_ids` is
+            # kept above for backward compatibility.
+            "retrieved": [
+                {
+                    "id": r.chunk.id,
+                    "version": r.chunk.version,
+                    "topic": r.chunk.topic,
+                    "title": r.chunk.title,
+                    "snippet": _snippet(r.chunk.text),
+                    "score": round(r.score, 5),
+                    "bm25_rank": r.bm25_rank,
+                    "dense_rank": r.dense_rank,
+                    "cited": r.chunk.id in set(self.answer.citations),
+                }
+                for r in self.retrieved
+            ],
             "answer": self.answer.to_dict(),
             "execution": self.execution.to_dict() if self.execution else None,
         }
+
+
+def _snippet(text: str, limit: int = 180) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"

@@ -56,6 +56,49 @@ SYSTEM_PROMPT = (
 )
 
 
+_ABSTAIN: Dict[str, object] = {
+    "answer": "I couldn't produce a grounded answer from the retrieved docs.",
+    "code": "",
+    "citations": [],
+    "abstained": True,
+}
+
+
+def _extract_json(text: str) -> Optional[Dict[str, object]]:
+    """Best-effort parse of the model's JSON answer, or ``None``.
+
+    ``output_config.format`` constrains the model to emit a bare JSON object, but
+    a truncated generation (``stop_reason == "max_tokens"`` — adaptive thinking
+    shares the ``max_tokens`` budget), an empty text block, or otherwise
+    malformed output must degrade to an abstain, never crash the request. We also
+    tolerate stray ```json fences or leading prose by extracting the first
+    balanced ``{...}`` span as a fallback.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        if text[:4].lower() == "json":
+            text = text[4:].strip()
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: decode the first JSON value starting at the first '{'. raw_decode
+    # is string-aware, so a '{' or '}' *inside* a string value (e.g. a code field
+    # like "d = {") doesn't throw off the parse the way naive brace-counting would.
+    start = text.find("{")
+    if start >= 0:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text[start:])
+            return obj if isinstance(obj, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return None
+
+
 def _format_chunks(chunks: List[Chunk]) -> str:
     blocks = []
     for chunk in chunks:
@@ -97,7 +140,10 @@ class AnthropicClient(LLMClient):
         prompt = build_user_prompt(question, version, chunks)
         resp = self.client.messages.create(
             model=self.model,
-            max_tokens=2048,
+            # Headroom for adaptive thinking *and* the JSON answer — they share
+            # this budget. Too small a cap truncates mid-JSON (stop_reason
+            # "max_tokens"); the answers themselves are short so this is ample.
+            max_tokens=4096,
             thinking={"type": "adaptive"},
             output_config={
                 "effort": self.effort,
@@ -106,18 +152,26 @@ class AnthropicClient(LLMClient):
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
-        if getattr(resp, "stop_reason", None) == "refusal":
-            return {
-                "answer": "The request was declined.",
-                "code": "",
-                "citations": [],
-                "abstained": True,
-            }
+        stop = getattr(resp, "stop_reason", None)
+        if stop == "refusal":
+            return dict(_ABSTAIN, answer="The request was declined.")
         text = next(
             (b.text for b in resp.content if getattr(b, "type", None) == "text"),
             "",
         )
-        return json.loads(text)
+        parsed = _extract_json(text)
+        if parsed is None:
+            # Truncated (max_tokens while thinking), empty, or malformed output:
+            # abstain rather than crash the caller. `stop` is surfaced for
+            # observability so a spike in truncations is visible in logs.
+            return dict(
+                _ABSTAIN,
+                answer=(
+                    "I couldn't produce a grounded answer"
+                    + (f" (model stopped: {stop})." if stop else ".")
+                ),
+            )
+        return parsed
 
 
 class MockClient(LLMClient):
