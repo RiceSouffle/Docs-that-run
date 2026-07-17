@@ -9,3 +9,5 @@ uvicorn>=0.29
 # For tests (httpx backs FastAPI's TestClient):
 pytest>=8.0
 httpx>=0.27
+# Lint:
+ruff>=0.6

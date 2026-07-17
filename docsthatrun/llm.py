@@ -18,12 +18,13 @@ import json
 import os
 from typing import Dict, List, Optional
 
+from .config import settings
 from .corpus import tokenize  # noqa: F401  (kept for parity / future use)
 from .schema import Chunk, RetrievalResult
 
-# Per the Anthropic guidance, default to the strongest model; override via env.
-DEFAULT_MODEL = os.environ.get("DOCSTHATRUN_MODEL", "claude-opus-4-8")
-DEFAULT_EFFORT = os.environ.get("DOCSTHATRUN_EFFORT", "medium")
+# Central config is the source of truth (env-driven); see docsthatrun.config.
+DEFAULT_MODEL = settings.model
+DEFAULT_EFFORT = settings.effort
 
 ANSWER_SCHEMA = {
     "type": "object",
@@ -129,7 +130,13 @@ class AnthropicClient(LLMClient):
         import anthropic  # imported lazily so the core has no hard dependency
 
         self._anthropic = anthropic
-        self.client = anthropic.Anthropic()
+        # Timeout + retries from config: the SDK retries 429/5xx/connection
+        # errors with backoff, and bounds each call so a hung request can't wedge
+        # a worker.
+        self.client = anthropic.Anthropic(
+            timeout=settings.llm_timeout_s,
+            max_retries=settings.llm_max_retries,
+        )
         self.model = model
         self.effort = effort
 

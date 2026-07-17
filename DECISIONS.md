@@ -107,6 +107,41 @@ None of these are exotic — they're the ordinary edges (timeouts, truncated mod
 output, half-built environments, empty result sets) that a demo skips and a real
 system can't. Surfacing and fixing them, with tests, is the point.
 
+## Production hardening
+
+The core is deliberately stdlib-only, but the *service* is built to be operated.
+The theme: do the real thing in-process with the standard library, with a clear
+seam to swap in heavier infra when a second instance actually exists.
+
+- **Sandbox resource limits.** The grader now runs each snippet under
+  `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE` / `RLIMIT_CORE=0`. The limits are
+  applied *inside* the child (a small launcher that self-`setrlimit`s, then
+  `runpy`s the target) rather than via `preexec_fn` — `preexec_fn` runs after
+  `fork` in a possibly-threaded server and can deadlock, whereas the launcher
+  runs single-threaded after `exec`. `RLIMIT_AS` is skipped on macOS (where it's
+  unreliable) and generous on Linux so a legitimate pydantic import never
+  false-fails. This closes the ROADMAP's headline limitation: the sandbox now
+  bounds CPU, memory, disk, *and* process lifetime — not just the happy path.
+  It is still a venv, not a container; running genuinely untrusted input at scale
+  would want gVisor/a microVM on top, and the limits are the defence-in-depth
+  layer beneath that.
+- **Config is one env-driven dataclass** (`config.py`), not scattered
+  `os.environ` reads, so behaviour is 12-factor and every knob is discoverable.
+- **Observability is stdlib.** JSON logs with a request id (`observability.py`),
+  and a Prometheus text endpoint built by hand rather than pulling in
+  `prometheus_client`. The interface is the same as a real exporter; the upgrade
+  path is a one-file change.
+- **Cache and rate-limiter are in-process** (`cache.py`, `ratelimit.py`) — an
+  LRU+TTL memo and a token bucket. Correct for one instance; both hide behind an
+  interface a Redis backend can implement for a fleet. The cache is the seed of
+  the ROADMAP's semantic cache.
+- **Thread-safe warmed singletons.** The retriever and client are built once
+  under a lock (double-checked) and warmed in the FastAPI lifespan, so there's no
+  init race and the first request isn't slow.
+- **Non-root container + healthcheck.** Because the sandbox runs model-authored
+  code, the server process must not be root; the image drops to an unprivileged
+  user and ships a `HEALTHCHECK`.
+
 ## Gate thresholds
 
 `GATE` in `run_evals.py` is the noise floor the committed data must clear

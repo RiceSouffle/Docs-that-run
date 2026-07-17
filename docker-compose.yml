@@ -12,3 +12,10 @@ services:
       # Passed through if set in your shell / .env; empty is fine (MockClient).
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - DOCSTHATRUN_LLM=${DOCSTHATRUN_LLM:-auto}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped

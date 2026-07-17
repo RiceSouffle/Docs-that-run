@@ -13,7 +13,7 @@ dependencies = []  # core is standard-library only
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
 server = ["fastapi>=0.110", "uvicorn>=0.29"]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.6"]
 
 [project.scripts]
 docsthatrun = "docsthatrun.cli:main"
@@ -24,3 +24,13 @@ packages = ["docsthatrun", "docsthatrun.evals"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+# Correctness-focused: pyflakes (F), pycodestyle (E/W), import order (I),
+# flake8-bugbear (B). Pyupgrade (UP) is intentionally off — the codebase targets
+# 3.9 and the modernizations are churn, not correctness.
+select = ["E", "F", "W", "I", "B"]

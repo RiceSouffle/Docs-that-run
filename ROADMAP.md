@@ -7,15 +7,20 @@ order below is deliberate — each step closes a specific gap a skeptical
 interviewer would probe.
 
 ### Shipped since v0
-- **Interactive demo UI** (`app/static/index.html`) + **terminal CLI**
-  (`docsthatrun ask` / `compare`) + **`/compare` endpoint** — the version-lock is
-  now something you can see, not just read about.
+- **Interactive demo UI** (`app/static/index.html`, an instrument/test-bench
+  design with self-hosted fonts) + **terminal CLI** (`docsthatrun ask` /
+  `compare`) + **`/compare` endpoint** — the version-lock is now something you
+  can see, not just read about.
 - **Failure taxonomy + per-query latency** in the eval report (part of Milestone 1).
-- **Containerized** (`Dockerfile` / `docker-compose.yml`): API + both sandboxes
-  in one image, works offline.
-- **Robustness pass** (see DECISIONS.md → Robustness & hardening): sandbox
+- **Robustness pass** (DECISIONS.md → Robustness & hardening): sandbox
   process-group isolation, graceful degradation on truncated/empty model output,
   a stricter CI gate, bounded API inputs — all pinned by regression tests.
+- **Production pass** (DECISIONS.md → Production hardening): sandbox **resource
+  limits** (CPU/memory/file/core), env-driven config, structured JSON logs with
+  request ids, Prometheus `/metrics` + `/stats`, an LRU+TTL answer cache, per-IP
+  rate limiting, security headers, typed request/response models, a warmed
+  thread-safe retriever, a **non-root** Docker image with a healthcheck, and a
+  `ruff` lint gate in CI. This delivers much of Milestone 5 in-process.
 
 ### Milestone 1 — Real Claude measurement (highest leverage)
 - Run `--client anthropic` over the golden set and publish Claude's true
@@ -49,12 +54,14 @@ interviewer would probe.
   human-labeled subset** (report Cohen's κ). Set the CI threshold from the
   measured judge noise floor, not an arbitrary number.
 
-### Milestone 5 — Operate it
-- Deploy the FastAPI service (Docker + a cloud host); wire Langfuse/OpenTelemetry
-  tracing with per-query token/latency/cost capture.
-- Add a semantic cache in front and publish the cost-vs-quality tradeoff.
-- Drift job: on each new library release, re-ingest and emit a drift-regression
-  report.
+### Milestone 5 — Operate it  *(mostly shipped — see "Production pass" above)*
+- ✅ Deploy shape: non-root Docker image + healthcheck; ✅ structured logs +
+  Prometheus metrics (per-query latency). *Still TODO:* a cloud host, and
+  token/cost capture via Langfuse/OpenTelemetry (needs the real Anthropic path).
+- ✅ In-process LRU+TTL cache. *Still TODO:* a true **semantic** cache
+  (embedding-keyed) and the published cost-vs-quality tradeoff.
+- *TODO:* drift job — on each new library release, re-ingest and emit a
+  drift-regression report.
 
 ### Milestone 6 — Tell the story
 - A `DECISIONS.md`-style blog post: the version-lock finding (62% crisp), the
@@ -66,6 +73,7 @@ interviewer would probe.
 - Default retrieval is lexical-only (BM25 + TF-IDF), not true dense hybrid.
 - MockClient executable-% is a plumbing check, not a quality metric.
 - Only code answers are execution-graded; conceptual answers aren't graded yet.
-- Sandbox runs snippets in a venv, not a locked-down container — fine for
-  trusted golden checks and self-authored answers; would need real isolation
-  before running untrusted input.
+- Sandbox now applies CPU/memory/file/core resource limits and runs snippets in
+  an isolated process group as a non-root user — but it's still a venv, not a
+  locked-down container. Running genuinely untrusted input at scale would want
+  gVisor/a microVM on top; the rlimits are the defence-in-depth layer beneath.

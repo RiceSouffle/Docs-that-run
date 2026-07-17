@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from .corpus import tokenize
 from .schema import Chunk, RetrievalResult

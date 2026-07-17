@@ -9,7 +9,6 @@ Each test pins a bug that was found by the adversarial bug-hunt and fixed:
   spawns a grandchild can't outlive the timeout (sandbox.grade).
 """
 
-import os
 import time
 
 import pytest
@@ -17,7 +16,6 @@ import pytest
 from docsthatrun.evals.run_evals import GATE, check_gate
 from docsthatrun.llm import _extract_json
 from docsthatrun.sandbox import grade, sandbox_available
-
 
 # ---- LLM answer parsing (llm._extract_json) --------------------------------
 

@@ -1,92 +1,116 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="548" viewBox="0 0 980 548" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="566" viewBox="0 0 1000 566" font-family="ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace">
   <defs>
     <style>
-      .ink { fill: #e8ecf2; }
-      .muted { fill: #97a2b0; }
-      .accent { fill: #7c8bff; }
-      .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
-      .kw { fill: #ff7b72; } .bi { fill: #79c0ff; } .str { fill: #a5d6ff; }
-      .fn { fill: #d2a8ff; } .num { fill: #79c0ff; } .code { fill: #e6edf3; }
+      .txt { fill: #d6dde6; } .dim { fill: #8590a0; } .faint { fill: #5a6475; }
+      .amber { fill: #ffb454; } .pass { fill: #3fb950; } .fail { fill: #f85149; }
+      .v1 { fill: #e0a34a; } .v2 { fill: #4aa3ff; }
+      .kw { fill: #ff9d6b; } .bi { fill: #5cc8ff; } .str { fill: #a9e46a; } .num { fill: #ffb454; } .fn { fill: #d7a3ff; }
+      .lbl { fill: #5a6475; letter-spacing: 2px; }
     </style>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0 H0 V48" fill="none" stroke="#141a23" stroke-width="1"/>
+    </pattern>
   </defs>
 
-  <!-- backdrop -->
-  <rect width="980" height="548" rx="16" fill="#0c0f14"/>
+  <rect width="1000" height="566" fill="#0a0c10"/>
+  <rect width="1000" height="566" fill="url(#grid)"/>
+  <rect width="1000" height="2" fill="#ffb454"/>
+  <rect x="0" y="2" width="640" height="2" fill="#ffb454" opacity="0.25"/>
 
   <!-- header -->
-  <text x="28" y="44" font-size="24" font-weight="700" class="ink">Docs<tspan class="accent">ThatRun</tspan></text>
-  <text x="28" y="70" font-size="13.5" class="muted">Version-aware docs RAG that grades its answers by <tspan class="ink" font-weight="600">running them</tspan>.</text>
-
-  <!-- pills -->
-  <g font-size="11.5" font-weight="600">
-    <rect x="742" y="26" width="98" height="24" rx="12" fill="#141922" stroke="#262d3a"/>
-    <circle cx="757" cy="38" r="4" fill="#4ade80"/>
-    <text x="767" y="42" class="muted">MockClient</text>
-    <rect x="848" y="26" width="104" height="24" rx="12" fill="#141922" stroke="#262d3a"/>
-    <circle cx="863" cy="38" r="4" fill="#4ade80"/>
-    <text x="873" y="42" class="muted">sandbox ✓</text>
+  <text x="28" y="42" font-size="20" font-weight="700" class="txt">docs<tspan class="amber">·</tspan>that<tspan class="amber">·</tspan>run</text>
+  <text x="212" y="42" font-size="11" class="faint">v0.3 · execution-graded rag</text>
+  <!-- status readouts -->
+  <g font-size="11">
+    <rect x="690" y="26" width="122" height="22" fill="#0d121a" stroke="#1c232e"/>
+    <circle cx="704" cy="37" r="3.5" class="amber"/>
+    <text x="714" y="41" class="dim">CLIENT: <tspan class="txt" font-weight="700">MOCK</tspan></text>
+    <rect x="820" y="26" width="152" height="22" fill="#0d121a" stroke="#1c232e"/>
+    <circle cx="834" cy="37" r="3.5" class="pass"/>
+    <text x="844" y="41" class="dim">SANDBOX: <tspan class="txt" font-weight="700">v1·v2 READY</tspan></text>
   </g>
+  <line x1="28" y1="60" x2="972" y2="60" stroke="#1c232e"/>
 
-  <!-- question -->
-  <text x="28" y="108" font-size="14" class="ink"><tspan font-weight="700">Q:</tspan> In Pydantic v2, how do I serialize a model instance to a dictionary?  <tspan class="muted">(v1 vs v2)</tspan></text>
+  <!-- query line -->
+  <text x="28" y="92" font-size="12" class="lbl">QUERY</text>
+  <text x="28" y="118" font-size="14"><tspan class="amber" font-weight="700">&gt; </tspan><tspan class="txt">In Pydantic v2, how do I serialize a model instance to a dictionary?</tspan><tspan class="dim">  ·  DIFF</tspan></text>
 
-  <!-- version-lock banner -->
-  <rect x="28" y="122" width="924" height="46" rx="10" fill="#12162a" stroke="#3a3f6a" stroke-dasharray="4 3"/>
-  <text x="44" y="144" font-size="12.5" class="ink">Same question, both versions. Because v2 removed several v1 names outright, <tspan class="accent" font-weight="700">the execution check is the version-correctness check</tspan>:</text>
-  <text x="44" y="160" font-size="12.5" class="ink">a v2-flavoured answer that used <tspan class="mono" fill="#e6edf3">model_dump()</tspan> runs on v2 but fails on the v1 sandbox, where that method doesn't exist.</text>
+  <!-- version-lock note -->
+  <rect x="28" y="134" width="944" height="46" fill="#10161f" stroke="#1c232e"/>
+  <rect x="28" y="134" width="2" height="46" class="amber"/>
+  <text x="46" y="156" font-size="12" class="dim">Same query, both versions. Because v2 removed several v1 names outright, <tspan class="amber">the execution check is the version-correctness</tspan></text>
+  <text x="46" y="172" font-size="12" class="dim"><tspan class="amber">check</tspan> — a snippet that used <tspan class="txt">model_dump()</tspan> passes on v2 but fails the v1 sandbox, where that method does not exist.</text>
 
-  <!-- ===== v1 card (FAIL) ===== -->
-  <g transform="translate(28,186)">
-    <rect width="452" height="336" rx="12" fill="#141922" stroke="#262d3a"/>
-    <text x="18" y="32" font-size="15" font-weight="700" class="ink">Pydantic v1</text>
-    <!-- FAIL badge -->
-    <rect x="300" y="16" width="136" height="26" rx="13" fill="#2a1416" stroke="#5b2a2f"/>
-    <text x="368" y="33" font-size="12.5" font-weight="700" fill="#f87171" text-anchor="middle">✕ FAIL on v1 sandbox</text>
+  <!-- ===== v1 panel (FAIL) ===== -->
+  <g transform="translate(28,196)">
+    <rect width="462" height="344" fill="#0d121a" stroke="#1c232e"/>
+    <rect width="462" height="30" fill="#10161f"/>
+    <line x1="0" y1="30" x2="462" y2="30" stroke="#1c232e"/>
+    <text x="16" y="20" font-size="11" class="lbl">PYDANTIC</text>
+    <rect x="92" y="8" width="24" height="16" fill="none" stroke="#e0a34a" stroke-opacity="0.5"/>
+    <text x="98" y="20" font-size="10" font-weight="700" class="v1">v1</text>
+
+    <!-- verdict instrument -->
+    <g transform="translate(16,46)">
+      <rect width="430" height="72" fill="#1e1210" stroke="#4a231f"/>
+      <line x1="104" y1="0" x2="104" y2="72" stroke="#4a231f"/>
+      <text x="52" y="38" font-size="26" font-weight="700" class="fail" text-anchor="middle">✕</text>
+      <text x="52" y="58" font-size="12" font-weight="700" class="fail" text-anchor="middle" letter-spacing="2">FAIL</text>
+      <text x="122" y="32" font-size="12" class="dim">target  <tspan class="txt">pydantic v1 sandbox</tspan></text>
+      <text x="122" y="52" font-size="12" class="dim">exit    <tspan class="txt">1</tspan></text>
+    </g>
 
     <!-- code -->
-    <rect x="18" y="52" width="416" height="176" rx="8" fill="#0a0e15"/>
-    <g class="mono" font-size="12.5">
-      <text x="32" y="74"><tspan class="kw">from</tspan><tspan class="code"> pydantic </tspan><tspan class="kw">import</tspan><tspan class="code"> BaseModel</tspan></text>
-      <text x="32" y="98"><tspan class="kw">class</tspan><tspan class="code"> </tspan><tspan class="fn">User</tspan><tspan class="code">(BaseModel):</tspan></text>
-      <text x="32" y="116"><tspan class="code">    name: </tspan><tspan class="bi">str</tspan></text>
-      <text x="32" y="134"><tspan class="code">    age: </tspan><tspan class="bi">int</tspan></text>
-      <text x="32" y="158"><tspan class="code">u = </tspan><tspan class="fn">User</tspan><tspan class="code">(name=</tspan><tspan class="str">'Ada'</tspan><tspan class="code">, age=</tspan><tspan class="num">36</tspan><tspan class="code">)</tspan></text>
-      <text x="32" y="176"><tspan class="kw">assert</tspan><tspan class="code"> u.model_dump() == {</tspan><tspan class="str">'name'</tspan><tspan class="code">: </tspan><tspan class="str">'Ada'</tspan><tspan class="code">, ...}</tspan></text>
+    <rect x="16" y="130" width="430" height="130" fill="#070a0e" stroke="#1c232e"/>
+    <g font-size="12">
+      <text x="30" y="150"><tspan class="kw">from</tspan><tspan class="txt"> pydantic </tspan><tspan class="kw">import</tspan><tspan class="txt"> BaseModel</tspan></text>
+      <text x="30" y="172"><tspan class="kw">class</tspan><tspan class="txt"> </tspan><tspan class="fn">User</tspan><tspan class="txt">(BaseModel):</tspan></text>
+      <text x="30" y="188"><tspan class="txt">    name: </tspan><tspan class="bi">str</tspan></text>
+      <text x="30" y="204"><tspan class="txt">    age: </tspan><tspan class="bi">int</tspan></text>
+      <text x="30" y="226"><tspan class="txt">u = </tspan><tspan class="fn">User</tspan><tspan class="txt">(name=</tspan><tspan class="str">'Ada'</tspan><tspan class="txt">, age=</tspan><tspan class="num">36</tspan><tspan class="txt">)</tspan></text>
+      <text x="30" y="242"><tspan class="kw">assert</tspan><tspan class="txt"> u.model_dump() == {...}</tspan></text>
     </g>
 
     <!-- stderr -->
-    <text x="18" y="256" font-size="11.5" class="muted">why it failed (stderr):</text>
-    <rect x="18" y="266" width="416" height="52" rx="8" fill="#0a0e15"/>
-    <g class="mono" font-size="11">
-      <text x="30" y="286" fill="#f2b8bd">AttributeError: 'User' object has no</text>
-      <text x="30" y="302" fill="#f2b8bd">attribute 'model_dump'</text>
-    </g>
+    <text x="16" y="284" font-size="11" class="lbl">STDERR</text>
+    <rect x="16" y="292" width="430" height="38" fill="#150c0b" stroke="#4a231f"/>
+    <text x="28" y="316" font-size="11" fill="#f0a9a4">AttributeError: 'User' object has no attribute 'model_dump'</text>
   </g>
 
-  <!-- ===== v2 card (PASS) ===== -->
-  <g transform="translate(500,186)">
-    <rect width="452" height="336" rx="12" fill="#141922" stroke="#262d3a"/>
-    <text x="18" y="32" font-size="15" font-weight="700" class="ink">Pydantic v2</text>
-    <!-- PASS badge -->
-    <rect x="300" y="16" width="136" height="26" rx="13" fill="#10241a" stroke="#245036"/>
-    <text x="368" y="33" font-size="12.5" font-weight="700" fill="#4ade80" text-anchor="middle">✓ PASS on v2 sandbox</text>
+  <!-- ===== v2 panel (PASS) ===== -->
+  <g transform="translate(510,196)">
+    <rect width="462" height="344" fill="#0d121a" stroke="#1c232e"/>
+    <rect width="462" height="30" fill="#10161f"/>
+    <line x1="0" y1="30" x2="462" y2="30" stroke="#1c232e"/>
+    <text x="16" y="20" font-size="11" class="lbl">PYDANTIC</text>
+    <rect x="92" y="8" width="24" height="16" fill="none" stroke="#4aa3ff" stroke-opacity="0.5"/>
+    <text x="98" y="20" font-size="10" font-weight="700" class="v2">v2</text>
 
-    <!-- code -->
-    <rect x="18" y="52" width="416" height="176" rx="8" fill="#0a0e15"/>
-    <g class="mono" font-size="12.5">
-      <text x="32" y="74"><tspan class="kw">from</tspan><tspan class="code"> pydantic </tspan><tspan class="kw">import</tspan><tspan class="code"> BaseModel</tspan></text>
-      <text x="32" y="98"><tspan class="kw">class</tspan><tspan class="code"> </tspan><tspan class="fn">User</tspan><tspan class="code">(BaseModel):</tspan></text>
-      <text x="32" y="116"><tspan class="code">    name: </tspan><tspan class="bi">str</tspan></text>
-      <text x="32" y="134"><tspan class="code">    age: </tspan><tspan class="bi">int</tspan></text>
-      <text x="32" y="158"><tspan class="code">u = </tspan><tspan class="fn">User</tspan><tspan class="code">(name=</tspan><tspan class="str">'Ada'</tspan><tspan class="code">, age=</tspan><tspan class="num">36</tspan><tspan class="code">)</tspan></text>
-      <text x="32" y="176"><tspan class="kw">assert</tspan><tspan class="code"> u.model_dump() == {</tspan><tspan class="str">'name'</tspan><tspan class="code">: </tspan><tspan class="str">'Ada'</tspan><tspan class="code">, ...}</tspan></text>
+    <!-- verdict instrument -->
+    <g transform="translate(16,46)">
+      <rect width="430" height="72" fill="#0c1c12" stroke="#1c4128"/>
+      <line x1="104" y1="0" x2="104" y2="72" stroke="#1c4128"/>
+      <text x="52" y="38" font-size="26" font-weight="700" class="pass" text-anchor="middle">✓</text>
+      <text x="52" y="58" font-size="12" font-weight="700" class="pass" text-anchor="middle" letter-spacing="2">PASS</text>
+      <text x="122" y="32" font-size="12" class="dim">target  <tspan class="txt">pydantic v2 sandbox</tspan></text>
+      <text x="122" y="52" font-size="12" class="dim">exit    <tspan class="txt">0</tspan></text>
     </g>
 
-    <!-- citation -->
-    <text x="18" y="256" font-size="11.5" class="muted">cited:</text>
-    <rect x="58" y="245" width="82" height="18" rx="5" fill="#0f1622" stroke="#262d3a"/>
-    <text x="66" y="258" font-size="11" class="mono code">c_v2_dump</text>
-    <text x="18" y="292" font-size="11.5" class="muted">retrieved: BM25 + TF-IDF, RRF-fused, filtered to v2</text>
-    <text x="18" y="310" font-size="11" class="mono muted">● c_v2_dump   score 0.0328   bm25#1 · dense#1</text>
+    <!-- code -->
+    <rect x="16" y="130" width="430" height="130" fill="#070a0e" stroke="#1c232e"/>
+    <g font-size="12">
+      <text x="30" y="150"><tspan class="kw">from</tspan><tspan class="txt"> pydantic </tspan><tspan class="kw">import</tspan><tspan class="txt"> BaseModel</tspan></text>
+      <text x="30" y="172"><tspan class="kw">class</tspan><tspan class="txt"> </tspan><tspan class="fn">User</tspan><tspan class="txt">(BaseModel):</tspan></text>
+      <text x="30" y="188"><tspan class="txt">    name: </tspan><tspan class="bi">str</tspan></text>
+      <text x="30" y="204"><tspan class="txt">    age: </tspan><tspan class="bi">int</tspan></text>
+      <text x="30" y="226"><tspan class="txt">u = </tspan><tspan class="fn">User</tspan><tspan class="txt">(name=</tspan><tspan class="str">'Ada'</tspan><tspan class="txt">, age=</tspan><tspan class="num">36</tspan><tspan class="txt">)</tspan></text>
+      <text x="30" y="242"><tspan class="kw">assert</tspan><tspan class="txt"> u.model_dump() == {...}</tspan></text>
+    </g>
+
+    <!-- cited + retrieval -->
+    <text x="16" y="284" font-size="11" class="lbl">CITED</text>
+    <rect x="66" y="273" width="84" height="16" fill="none" stroke="#ffb454" stroke-opacity="0.35"/>
+    <text x="74" y="285" font-size="11" class="amber">c_v2_dump</text>
+    <text x="16" y="314" font-size="11" class="dim">● c_v2_dump   score 0.0328   bm25#1 · dense#1</text>
   </g>
 </svg>

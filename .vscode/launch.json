@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "▶ Serve UI + API (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8000"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Eval report (--answers)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "docsthatrun.evals.run_evals",
+      "args": ["--answers"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "CLI: compare (edit the question)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "docsthatrun",
+      "args": ["compare", "In Pydantic v2, how do I serialize a model to a dict?"],
+      "console": "integratedTerminal"
+    }
+  ]
+}

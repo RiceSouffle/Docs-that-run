@@ -5,7 +5,8 @@
 [![evals](https://github.com/RiceSouffle/COOL-TOOL/actions/workflows/evals.yml/badge.svg)](https://github.com/RiceSouffle/COOL-TOOL/actions/workflows/evals.yml)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![core deps](https://img.shields.io/badge/core%20dependencies-0-brightgreen)
-![tests](https://img.shields.io/badge/tests-41%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-68%20passing-brightgreen)
+![lint](https://img.shields.io/badge/lint-ruff-black)
 
 Most docs assistants answer from whatever they retrieved and hope the code is
 right. DocsThatRun answers questions about a *specific* version of a
@@ -108,8 +109,38 @@ python3 -m docsthatrun.evals.run_evals --answers --client anthropic
 
 # 4. Serve the API + demo UI:
 pip install -r requirements.txt
-uvicorn app.main:app --reload        # POST /ask, POST /compare, GET /health
+uvicorn app.main:app --reload        # / (UI) · POST /ask,/compare · /health,/ready,/metrics,/stats
 ```
+
+## Running it in production
+
+The core stays stdlib-only, but the service layer is built to be operated, not
+just demoed. All of it is env-driven (see [`docsthatrun/config.py`](docsthatrun/config.py)):
+
+- **Sandboxed execution with resource limits.** The grader runs each snippet in
+  its own process group under `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE`
+  (and `RLIMIT_CORE=0`), so an infinite loop, a memory bomb, a disk-fill, or a
+  fork that outlives the timeout is contained — not just the happy path.
+- **Structured JSON logs** with a per-request id, method, path, status, and
+  latency; **Prometheus metrics** at `/metrics` (request counts, latencies,
+  grade pass/fail, cache hit-rate) and a human-readable `/stats`.
+- **Answer cache** (LRU + TTL) — repeat queries skip the subprocess and return
+  in ~1 ms; responses carry `meta.cached`.
+- **Per-IP token-bucket rate limiting** on the expensive endpoints, with
+  `Retry-After` on 429.
+- **Hardened HTTP**: typed request/response models (real OpenAPI at `/docs`),
+  bounded inputs, `content-security-policy` + `x-frame-options` +
+  `x-content-type-options`, a warmed thread-safe retriever/client, and a
+  `/ready` readiness probe.
+- **Container**: [`Dockerfile`](Dockerfile) runs as a non-root user with a
+  `HEALTHCHECK`; `ruff` lint gates CI alongside the eval gate.
+
+```bash
+docker compose up --build            # API + both sandboxes, non-root, health-checked
+```
+
+See [DECISIONS.md](DECISIONS.md) → *Production hardening* for why each piece is
+in-process stdlib (and its upgrade path to Redis / OpenTelemetry).
 
 ## Current numbers (seed corpus)
 
@@ -143,10 +174,11 @@ data (27 doc chunks, 25 answerable golden questions, 6 unanswerable):
 | cited/abstaining answer via Claude | [`docsthatrun/llm.py`](docsthatrun/llm.py) |
 | execution grader (pinned venvs, process-group isolation) | [`docsthatrun/sandbox.py`](docsthatrun/sandbox.py) |
 | eval harness + CI gate + failure taxonomy | [`docsthatrun/evals/run_evals.py`](docsthatrun/evals/run_evals.py) |
-| HTTP API | [`app/main.py`](app/main.py) |
-| interactive demo UI | [`app/static/index.html`](app/static/index.html) |
+| HTTP API (lifespan, middleware, models) | [`app/main.py`](app/main.py) |
+| env-driven config · cache · rate limit · logging+metrics | [`config.py`](docsthatrun/config.py) · [`cache.py`](docsthatrun/cache.py) · [`ratelimit.py`](docsthatrun/ratelimit.py) · [`observability.py`](docsthatrun/observability.py) |
+| interactive demo UI (instrument aesthetic) | [`app/static/index.html`](app/static/index.html) |
 | terminal CLI (`ask` / `compare`) | [`docsthatrun/cli.py`](docsthatrun/cli.py) |
-| container image | [`Dockerfile`](Dockerfile) · [`docker-compose.yml`](docker-compose.yml) |
+| container image (non-root, healthcheck) | [`Dockerfile`](Dockerfile) · [`docker-compose.yml`](docker-compose.yml) |
 | design decisions & tradeoffs | [`DECISIONS.md`](DECISIONS.md) |
 
 See [DECISIONS.md](DECISIONS.md) for why each choice was made (and its honest

@@ -1,8 +1,8 @@
 """End-to-end eval-harness tests using the offline MockClient."""
 
-import pytest
-
 from types import SimpleNamespace
+
+import pytest
 
 from docsthatrun.evals.metrics import recall_at_k, reciprocal_rank
 from docsthatrun.evals.run_evals import (

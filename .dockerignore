@@ -1,6 +1,8 @@
 .git
 .github
 .venvs
+.venv
+.vscode
 results
 .pytest_cache
 __pycache__

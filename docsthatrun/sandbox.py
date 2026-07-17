@@ -18,7 +18,9 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+
+from .config import settings
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _VENV_DIR = os.path.join(_REPO_ROOT, ".venvs")
@@ -28,7 +30,40 @@ VENV_PYTHON = {
     "v2": os.path.join(_VENV_DIR, "pydantic_v2", "bin", "python"),
 }
 
-DEFAULT_TIMEOUT_SECONDS = 20
+DEFAULT_TIMEOUT_SECONDS = settings.sandbox_timeout_s
+
+
+def _launcher_code(cpu_s: int, fsize_bytes: int, as_bytes: int) -> str:
+    """Python that self-applies rlimits, then runs the target as __main__.
+
+    Setting the limits *inside* the child (after exec, single-threaded) instead
+    of via ``preexec_fn`` avoids the fork-in-a-threaded-server deadlock hazard.
+    RLIMIT_AS is skipped on macOS (unreliable there) and applied on Linux/prod;
+    it's set generously so a legit pydantic import never false-fails. CPU and
+    FSIZE limits stop infinite loops and disk-fill snippets; CORE=0 suppresses
+    core dumps. All best-effort — a platform that rejects a limit is not fatal.
+    """
+    return (
+        "import resource,runpy,sys\n"
+        "def _l(r,v):\n"
+        " try:\n"
+        "  s,h=resource.getrlimit(r)\n"
+        "  c=v if h==resource.RLIM_INFINITY else min(v,h)\n"
+        "  resource.setrlimit(r,(c,c))\n"
+        " except Exception: pass\n"
+        f"_l(resource.RLIMIT_CPU,{cpu_s})\n"
+        f"_l(resource.RLIMIT_FSIZE,{fsize_bytes})\n"
+        "_l(resource.RLIMIT_CORE,0)\n"
+        f"_AS={as_bytes}\n"
+        "if _AS>0 and sys.platform!='darwin':\n"
+        " _l(resource.RLIMIT_AS,_AS)\n"
+        # Normalize argv so the target sees exactly what `python file.py` gives
+        # ([path]); otherwise the launcher's own argv ('-c', path) leaks the path
+        # in twice and a snippet using argparse / len(sys.argv) would false-fail.
+        "_t=sys.argv[1]\n"
+        "sys.argv=[_t]\n"
+        "runpy.run_path(_t,run_name='__main__')\n"
+    )
 
 
 @dataclass
@@ -98,8 +133,25 @@ def sandbox_available(version: str) -> bool:
 
 
 def grade(
-    code: str, version: str, timeout: int = DEFAULT_TIMEOUT_SECONDS
+    code: str,
+    version: str,
+    timeout: Optional[int] = None,
+    cpu_seconds: Optional[int] = None,
+    memory_mb: Optional[int] = None,
+    file_mb: Optional[int] = None,
 ) -> ExecResult:
+    """Run ``code`` against the pinned-version venv under resource limits.
+
+    ``timeout`` bounds wall-clock; ``cpu_seconds``/``memory_mb``/``file_mb`` cap
+    CPU time, address space, and file writes. ``None`` means "use the configured
+    default" (see docsthatrun.config). Defence-in-depth: even a self-authored
+    snippet can loop, allocate, or write forever — the limits contain all three.
+    """
+    timeout = timeout if timeout is not None else settings.sandbox_timeout_s
+    cpu_seconds = cpu_seconds if cpu_seconds is not None else settings.sandbox_cpu_seconds
+    memory_mb = memory_mb if memory_mb is not None else settings.sandbox_memory_mb
+    file_mb = file_mb if file_mb is not None else settings.sandbox_file_mb
+
     if version not in VENV_PYTHON:
         return ExecResult(False, False, reason=f"unknown version {version!r}")
 
@@ -137,7 +189,15 @@ def grade(
         )
         if posix:
             popen_kwargs["start_new_session"] = True
-        proc = subprocess.Popen([python, tmp.name], **popen_kwargs)
+            cmd: List[str] = [
+                python,
+                "-c",
+                _launcher_code(cpu_seconds, file_mb * 1024 * 1024, memory_mb * 1024 * 1024),
+                tmp.name,
+            ]
+        else:  # pragma: no cover - non-POSIX has no rlimits; run directly
+            cmd = [python, tmp.name]
+        proc = subprocess.Popen(cmd, **popen_kwargs)
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:

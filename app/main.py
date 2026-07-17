@@ -2,166 +2,369 @@
 
     uvicorn app.main:app --reload
 
+Production concerns handled here: env-driven config, structured JSON access logs
+with a request id, a thread-safe warmed retriever/client, an answer cache, per-IP
+rate limiting, security headers, and Prometheus metrics.
+
 Endpoints
 ---------
-GET  /                 the interactive demo UI (single-page app, no build step)
-GET  /health           liveness + which LLM client and whether the sandbox is up
-GET  /examples         sample questions (answerable + unanswerable) for the UI
-POST /ask              {"question": ..., "version": "v1"|"v2", "execute": true}
-POST /compare          {"question": ...}  -> answers for BOTH versions side by side
-
-`/ask` returns the cited answer plus, if requested and the sandbox is set up, the
-pass/fail result of executing the generated snippet against that version.
-`/compare` is the version-lock showcase: the same question answered for v1 and v2,
-each graded against its own pinned sandbox.
+GET  /                the interactive demo UI (single-page app)
+GET  /health          liveness + client + sandbox status
+GET  /ready           readiness (corpus loaded, sandbox usable)
+GET  /metrics         Prometheus text exposition
+GET  /stats           JSON metrics snapshot (human-friendly)
+GET  /examples        sample questions for the UI
+POST /ask             {"question","version","execute","top_k"} -> graded answer
+POST /compare         {"question"} -> answers for BOTH versions (the version-lock)
 """
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Optional
+import threading
+import time
+import uuid
+from contextlib import asynccontextmanager
+from typing import Dict, List, Optional
 
 try:
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import HTMLResponse
-    from pydantic import BaseModel, Field  # FastAPI request model (v2, app-side only)
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+    from fastapi.staticfiles import StaticFiles
+    from pydantic import BaseModel, Field
 except ImportError as exc:  # pragma: no cover
     raise SystemExit(
         "The API server needs fastapi + uvicorn: pip install -r requirements.txt"
     ) from exc
 
 from docsthatrun.answer import AnswerResult, build_answer
+from docsthatrun.cache import TTLCache
+from docsthatrun.config import settings
 from docsthatrun.corpus import load_corpus
 from docsthatrun.llm import get_client
+from docsthatrun.observability import Metrics, configure_logging
+from docsthatrun.ratelimit import RateLimiter
 from docsthatrun.retrieve import HybridRetriever
 from docsthatrun.sandbox import sandbox_available
 from docsthatrun.schema import VERSIONS
 
-app = FastAPI(title="DocsThatRun", version="0.2.0")
+configure_logging(settings.log_level, settings.log_json)
+log = logging.getLogger("docsthatrun.api")
+
+APP_VERSION = "0.3.0"
+
+metrics = Metrics()
+answer_cache = TTLCache(settings.cache_max, settings.cache_ttl_s)
+limiter = RateLimiter(settings.rate_limit_rpm, settings.rate_limit_burst)
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
+# ---- thread-safe, warmed singletons ---------------------------------------
+_lock = threading.Lock()
 _retriever: Optional[HybridRetriever] = None
 _client = None
 
 
-def _get_retriever() -> HybridRetriever:
+def get_retriever() -> HybridRetriever:
     global _retriever
     if _retriever is None:
-        _retriever = HybridRetriever(load_corpus())
+        with _lock:  # double-checked: build exactly once even under concurrency
+            if _retriever is None:
+                _retriever = HybridRetriever(load_corpus())
     return _retriever
 
 
-def _get_client():
+def get_llm():
     global _client
     if _client is None:
-        _client = get_client()
+        with _lock:
+            if _client is None:
+                _client = get_client()
     return _client
 
 
-def _graded(result: AnswerResult, execute: bool) -> dict:
-    """Grade the snippet against the sandbox when asked, then serialize."""
-    if (
-        execute
-        and result.answer.code
-        and not result.answer.abstained
-        and sandbox_available(result.version)
-    ):
-        result.execution_grade()
-    return result.to_dict()
+@asynccontextmanager
+async def lifespan(app: "FastAPI"):
+    # Warm the retriever + client at startup so the first request isn't slow and
+    # any config/corpus error surfaces on boot, not mid-request.
+    get_retriever()
+    client = get_llm()
+    log.info(
+        "startup",
+        extra={
+            "client": type(client).__name__,
+            "sandbox": {v: sandbox_available(v) for v in VERSIONS},
+            "cache_max": settings.cache_max,
+            "rate_rpm": settings.rate_limit_rpm,
+        },
+    )
+    yield
 
+
+app = FastAPI(title="DocsThatRun", version=APP_VERSION, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+if settings.cors_origins:  # opt-in; same-origin UI needs none
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
+
+_CSP = (
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "script-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; "
+    "connect-src 'self'; base-uri 'none'; frame-ancestors 'self'"
+)
+
+
+def _security_headers(rid: str) -> Dict[str, str]:
+    return {
+        "x-request-id": rid,
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "SAMEORIGIN",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": _CSP,
+    }
+
+
+def _route_label(request: Request) -> str:
+    # The matched route *template* (e.g. "/ask"), not the raw client path, so a
+    # flood of distinct URLs (404s) can't blow up metric cardinality.
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or "unmatched"
+
+
+@app.middleware("http")
+async def observe(request: Request, call_next):
+    """Attach a request id, time the request, log it as JSON, add security headers.
+
+    Security headers and the request id are applied to *every* response —
+    including an unhandled-500 built here — not just the happy path.
+    """
+    rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    request.state.request_id = rid
+    t0 = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:  # unhandled -> log, count, and return a clean 500 with headers
+        latency = round((time.perf_counter() - t0) * 1000, 1)
+        log.exception("request_error", extra={"request_id": rid, "path": request.url.path, "latency_ms": latency})
+        metrics.record_request(_route_label(request), 500, latency)
+        response = JSONResponse(status_code=500, content={"detail": "internal server error"})
+        for k, v in _security_headers(rid).items():
+            response.headers[k] = v
+        return response
+    latency = round((time.perf_counter() - t0) * 1000, 1)
+    metrics.record_request(_route_label(request), response.status_code, latency)
+    log.info(
+        "request",
+        extra={
+            "request_id": rid, "method": request.method, "path": request.url.path,
+            "status": response.status_code, "latency_ms": latency,
+            "client_ip": request.client.host if request.client else None,
+        },
+    )
+    for k, v in _security_headers(rid).items():
+        response.headers[k] = v
+    return response
+
+
+# ---- request / response models --------------------------------------------
 
 class AskRequest(BaseModel):
-    question: str
-    version: str = "v2"
+    question: str = Field(min_length=1, max_length=settings.max_question_chars)
+    version: str = settings.default_version
     execute: bool = True
-    # Bounded: top_k <= 0 would silently retrieve nothing (or, negative, drop the
-    # top chunks via ordered[:-k]) and yield a wrong/abstained answer with no error.
-    top_k: int = Field(5, ge=1, le=50)
+    top_k: int = Field(settings.top_k_default, ge=1, le=settings.top_k_max)
 
 
 class CompareRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=settings.max_question_chars)
     execute: bool = True
-    top_k: int = Field(5, ge=1, le=50)
+    top_k: int = Field(settings.top_k_default, ge=1, le=settings.top_k_max)
 
+
+class ExecutionOut(BaseModel):
+    passed: bool
+    available: bool
+    returncode: Optional[int] = None
+    reason: str = ""
+    stderr_tail: str = ""
+
+
+class RetrievedOut(BaseModel):
+    id: str
+    version: str
+    topic: str
+    title: str
+    snippet: str
+    score: float
+    bm25_rank: Optional[int] = None
+    dense_rank: Optional[int] = None
+    cited: bool
+
+
+class AnswerOut(BaseModel):
+    answer: str
+    code: str
+    citations: List[str]
+    abstained: bool
+
+
+class MetaOut(BaseModel):
+    latency_ms: float
+    cached: bool
+    client: str
+
+
+class AskResponse(BaseModel):
+    question: str
+    version: str
+    retrieved_ids: List[str]
+    retrieved: List[RetrievedOut]
+    answer: AnswerOut
+    execution: Optional[ExecutionOut] = None
+    meta: MetaOut
+
+
+class CompareResponse(BaseModel):
+    question: str
+    versions: Dict[str, AskResponse]
+
+
+# ---- core answer path (cache + grade + metrics) ---------------------------
+
+def _grade_outcome(graded: dict) -> str:
+    if graded["answer"]["abstained"]:
+        return "abstain"
+    ex = graded.get("execution")
+    if ex is None or not ex["available"]:
+        return "no_grade"
+    return "pass" if ex["passed"] else "fail"
+
+
+def _answer(question: str, version: str, execute: bool, top_k: int) -> dict:
+    key = (question.strip(), version, top_k, execute)
+    hit = answer_cache.get(key)
+    if hit is not None:
+        out = dict(hit)
+        out["meta"] = {**hit["meta"], "cached": True}
+        return out
+
+    t0 = time.perf_counter()
+    result: AnswerResult = build_answer(
+        question, version, get_retriever(), client=get_llm(), top_k=top_k
+    )
+    if (
+        execute and result.answer.code and not result.answer.abstained
+        and sandbox_available(version)
+    ):
+        result.execution_grade()
+    graded = result.to_dict()
+    graded["meta"] = {
+        "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+        "cached": False,
+        "client": type(get_llm()).__name__,
+    }
+    metrics.record_grade(_grade_outcome(graded))
+    answer_cache.set(key, graded)
+    return graded
+
+
+# ---- routes ----------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    path = os.path.join(_STATIC_DIR, "index.html")
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            return handle.read()
-    except FileNotFoundError:  # pragma: no cover - static asset missing
-        raise HTTPException(status_code=500, detail="UI asset not found")
+        with open(os.path.join(_STATIC_DIR, "index.html"), "r", encoding="utf-8") as h:
+            return h.read()
+    except FileNotFoundError:  # pragma: no cover
+        raise HTTPException(status_code=500, detail="UI asset not found") from None
 
 
 @app.get("/health")
 def health() -> dict:
     return {
         "status": "ok",
-        "client": type(_get_client()).__name__,
+        "version": APP_VERSION,
+        "client": type(get_llm()).__name__,
         "sandbox": {v: sandbox_available(v) for v in VERSIONS},
     }
 
 
+@app.get("/ready")
+def ready() -> dict:
+    corpus_ok = len(get_retriever().chunks) > 0
+    sandbox = {v: sandbox_available(v) for v in VERSIONS}
+    return {"ready": corpus_ok, "corpus": corpus_ok, "sandbox": sandbox}
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def prometheus() -> str:
+    return metrics.render_prometheus(answer_cache.stats())
+
+
+@app.get("/stats")
+def stats() -> dict:
+    return metrics.snapshot(answer_cache.stats())
+
+
 @app.get("/examples")
 def examples() -> dict:
-    """A few sample questions the UI can offer as one-click demos.
-
-    Loaded lazily from the golden/unanswerable sets so they stay in sync with
-    the committed data.
-    """
     from docsthatrun.evals.run_evals import load_golden, load_unanswerable
 
     answerable = [
-        {"question": item.question, "version": item.version}
-        for item in load_golden()
+        {"question": i.question, "version": i.version, "answerable": True}
+        for i in load_golden()
     ]
     unanswerable = [
-        {"question": item.question, "version": item.version}
-        for item in load_unanswerable()
+        {"question": i.question, "version": i.version, "answerable": False}
+        for i in load_unanswerable()
     ]
     return {"answerable": answerable, "unanswerable": unanswerable}
 
 
-@app.post("/ask")
-def ask(req: AskRequest) -> dict:
+def _rate_limit(request: Request) -> None:
+    ip = request.client.host if request.client else "anon"
+    ok, retry = limiter.allow(ip)
+    if not ok:
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded",
+            headers={"Retry-After": str(int(retry) + 1)},
+        )
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask(req: AskRequest, request: Request) -> dict:
+    _rate_limit(request)
     if req.version not in VERSIONS:
         raise HTTPException(status_code=400, detail="version must be 'v1' or 'v2'")
     try:
-        result = build_answer(
-            req.question,
-            req.version,
-            _get_retriever(),
-            client=_get_client(),
-            top_k=req.top_k,
-        )
-    except Exception as exc:  # upstream LLM / parse failure -> clean 502, not a 500
-        raise HTTPException(status_code=502, detail=f"answer generation failed: {exc}")
-    return _graded(result, req.execute)
+        return _answer(req.question, req.version, req.execute, req.top_k)
+    except HTTPException:
+        raise
+    except Exception as exc:  # upstream LLM / parse failure -> clean 502
+        log.exception("ask_failed", extra={"request_id": getattr(request.state, "request_id", None)})
+        raise HTTPException(status_code=502, detail=f"answer generation failed: {exc}") from exc
 
 
-@app.post("/compare")
-def compare(req: CompareRequest) -> dict:
-    """Answer the same question for BOTH versions — the version-lock showcase.
-
-    A v2-flavoured answer run against the v1 sandbox fails, and vice-versa; this
-    endpoint surfaces that contrast in a single call for the UI's compare view.
-    """
-    results = {}
+@app.post("/compare", response_model=CompareResponse)
+def compare(req: CompareRequest, request: Request) -> dict:
+    """Answer the same question for BOTH versions — the version-lock showcase."""
+    _rate_limit(request)
     try:
-        for version in VERSIONS:
-            results[version] = build_answer(
-                req.question,
-                version,
-                _get_retriever(),
-                client=_get_client(),
-                top_k=req.top_k,
-            )
-    except Exception as exc:  # upstream LLM / parse failure -> clean 502, not a 500
-        raise HTTPException(status_code=502, detail=f"answer generation failed: {exc}")
-    # Grade outside the try (as /ask does), so a grader-side error isn't
-    # mislabeled "answer generation failed".
-    versions = {v: _graded(r, req.execute) for v, r in results.items()}
+        versions = {
+            v: _answer(req.question, v, req.execute, req.top_k) for v in VERSIONS
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("compare_failed", extra={"request_id": getattr(request.state, "request_id", None)})
+        raise HTTPException(status_code=502, detail=f"answer generation failed: {exc}") from exc
     return {"question": req.question, "versions": versions}

@@ -1,0 +1,15 @@
+Vendored fonts (self-hosted so the app makes zero external requests at runtime).
+
+JetBrains Mono
+  jetbrains-mono-400.woff2, jetbrains-mono-700.woff2
+  © JetBrains — SIL Open Font License 1.1
+  https://github.com/JetBrains/JetBrainsMono
+
+IBM Plex Sans
+  ibm-plex-sans-400.woff2, ibm-plex-sans-600.woff2
+  © IBM — SIL Open Font License 1.1
+  https://github.com/IBM/plex
+
+Both fonts are licensed under the SIL Open Font License, Version 1.1
+(https://openfontlicense.org). The latin subsets here were obtained via the
+Fontsource CDN (https://fontsource.org).

@@ -26,7 +26,6 @@ from .retrieve import HybridRetriever
 from .sandbox import sandbox_available
 from .schema import VERSIONS
 
-
 # ---- tiny ANSI helper (no dependencies) ------------------------------------
 
 class _C:
