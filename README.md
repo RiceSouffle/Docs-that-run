@@ -2,7 +2,7 @@
 
 **Version-aware documentation RAG that grades its answers by running them.**
 
-[![evals](https://github.com/RiceSouffle/COOL-TOOL/actions/workflows/evals.yml/badge.svg)](https://github.com/RiceSouffle/COOL-TOOL/actions/workflows/evals.yml)
+[![evals](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml/badge.svg)](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![core deps](https://img.shields.io/badge/core%20dependencies-0-brightgreen)
 ![tests](https://img.shields.io/badge/tests-68%20passing-brightgreen)
