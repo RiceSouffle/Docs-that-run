@@ -26,6 +26,10 @@ packages = ["docsthatrun", "docsthatrun.evals"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+# Put the repo root on sys.path so `docsthatrun` / `app` import under the bare
+# `pytest` console script (CI), not only under `python -m pytest` (which adds the
+# CWD itself). Without this, CI collection fails with ModuleNotFoundError.
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 120
