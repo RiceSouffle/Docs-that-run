@@ -7,6 +7,7 @@
 ![core deps](https://img.shields.io/badge/core%20dependencies-0-brightgreen)
 ![tests](https://img.shields.io/badge/tests-68%20passing-brightgreen)
 ![lint](https://img.shields.io/badge/lint-ruff-black)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Most docs assistants answer from whatever they retrieved and hope the code is
 right. DocsThatRun answers questions about a *specific* version of a
@@ -184,3 +185,9 @@ data (27 doc chunks, 25 answerable golden questions, 6 unanswerable):
 See [DECISIONS.md](DECISIONS.md) for why each choice was made (and its honest
 limitations), and [ROADMAP.md](ROADMAP.md) for the path from this slice to a
 flagship portfolio piece.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The bundled fonts (JetBrains Mono, IBM Plex Sans)
+are third-party assets under the SIL Open Font License and keep their own terms;
+see [`app/static/fonts/NOTICE.txt`](app/static/fonts/NOTICE.txt).

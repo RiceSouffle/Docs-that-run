@@ -4,10 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docsthatrun"
-version = "0.1.0"
+version = "0.3.0"
 description = "Version-aware documentation RAG with execution-graded answers (Pydantic v1 -> v2)"
 readme = "README.md"
 requires-python = ">=3.9"
+license = { text = "MIT" }
+classifiers = ["License :: OSI Approved :: MIT License"]
 dependencies = []  # core is standard-library only
 
 [project.optional-dependencies]
