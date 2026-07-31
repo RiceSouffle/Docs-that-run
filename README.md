@@ -5,7 +5,7 @@
 [![evals](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml/badge.svg)](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![core deps](https://img.shields.io/badge/core%20dependencies-0-brightgreen)
-![tests](https://img.shields.io/badge/tests-81%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-91%20passing-brightgreen)
 ![lint](https://img.shields.io/badge/lint-ruff-black)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 

@@ -41,6 +41,10 @@ def _csv(name: str, default: Tuple[str, ...]) -> Tuple[str, ...]:
     return tuple(p.strip() for p in raw.split(",") if p.strip())
 
 
+def _clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(value, high))
+
+
 @dataclass(frozen=True)
 class Settings:
     # ---- LLM ----------------------------------------------------------------
@@ -82,14 +86,22 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        # `top_k` is bounded here, not only in the API's Field(ge=..., le=...).
+        # Pydantic does not validate field *defaults*, so a bad
+        # DOCSTHATRUN_TOP_K would sail past the wire contract that rejects the
+        # identical value when sent explicitly: 0 retrieves nothing (an answer
+        # built from no documentation at all) and a negative value slices the
+        # top-ranked chunks off. Clamping at the source fixes every consumer.
+        top_k_max = _clamp(_int("DOCSTHATRUN_TOP_K_MAX", cls.top_k_max), 1, 1000)
+        top_k_default = _clamp(_int("DOCSTHATRUN_TOP_K", cls.top_k_default), 1, top_k_max)
         return cls(
             model=os.environ.get("DOCSTHATRUN_MODEL", cls.model),
             effort=os.environ.get("DOCSTHATRUN_EFFORT", cls.effort),
             llm_timeout_s=_float("DOCSTHATRUN_LLM_TIMEOUT", cls.llm_timeout_s),
             llm_max_retries=_int("DOCSTHATRUN_LLM_RETRIES", cls.llm_max_retries),
             default_version=os.environ.get("DOCSTHATRUN_DEFAULT_VERSION", cls.default_version),
-            top_k_default=_int("DOCSTHATRUN_TOP_K", cls.top_k_default),
-            top_k_max=_int("DOCSTHATRUN_TOP_K_MAX", cls.top_k_max),
+            top_k_default=top_k_default,
+            top_k_max=top_k_max,
             max_question_chars=_int("DOCSTHATRUN_MAX_QUESTION_CHARS", cls.max_question_chars),
             sandbox_timeout_s=_int("DOCSTHATRUN_SANDBOX_TIMEOUT", cls.sandbox_timeout_s),
             sandbox_cpu_seconds=_int("DOCSTHATRUN_SANDBOX_CPU", cls.sandbox_cpu_seconds),

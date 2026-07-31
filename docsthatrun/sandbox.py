@@ -30,6 +30,17 @@ VENV_PYTHON = {
     "v2": os.path.join(_VENV_DIR, "pydantic_v2", "bin", "python"),
 }
 
+# What each sandbox must be able to import to be considered usable. v2 also needs
+# pydantic_settings: v2 split settings into its own distribution, and golden item
+# g_v2_settings exercises it. Probing only `pydantic` would call a half-installed
+# v2 venv "available" and then charge the resulting ModuleNotFoundError to answer
+# quality (bucket `wrong_version_api`) — the exact misattribution this probe
+# exists to prevent.
+_PROBE_IMPORTS = {
+    "v1": "import pydantic",
+    "v2": "import pydantic, pydantic_settings",
+}
+
 DEFAULT_TIMEOUT_SECONDS = settings.sandbox_timeout_s
 
 
@@ -102,6 +113,27 @@ def _kill_process_tree(proc: "subprocess.Popen", posix: bool) -> None:
             pass
 
 
+# Only ever surface a bounded tail of a snippet's output. `stderr_tail` is 400
+# chars and stdout is not reported at all, so this is generous — its job is to
+# guarantee that however much the child wrote, this process reads a fixed
+# maximum into memory.
+_MAX_CAPTURE_BYTES = 64 * 1024
+
+
+def _read_tail(path: str, limit: int = _MAX_CAPTURE_BYTES) -> str:
+    """Last ``limit`` bytes of ``path``, decoded leniently. Never loads the whole
+    file: the interesting part of a traceback is at the end anyway."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            if size > limit:
+                handle.seek(size - limit)
+            data = handle.read(limit)
+    except OSError:  # pragma: no cover - file vanished or unreadable
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
 def sandbox_available(version: str) -> bool:
     """True only if the venv exists *and* pydantic actually imports in it.
 
@@ -109,7 +141,8 @@ def sandbox_available(version: str) -> bool:
     the venv before ``pip install`` runs, so an interrupted setup leaves a
     ``bin/python`` with no pydantic. Reporting that as "available" would grade
     every snippet as a failing ``ModuleNotFoundError`` and misattribute it to
-    answer quality. We probe ``import pydantic`` and cache *success only*.
+    answer quality. We probe every package the version's golden set needs and
+    cache *success only*.
     """
     python = VENV_PYTHON.get(version, "")
     if not python or not os.path.exists(python):
@@ -118,7 +151,7 @@ def sandbox_available(version: str) -> bool:
         return True
     try:
         proc = subprocess.run(
-            [python, "-c", "import pydantic"],
+            [python, "-c", _PROBE_IMPORTS[version]],
             capture_output=True,
             timeout=15,
             env={"PYTHONPATH": "", "PATH": os.environ.get("PATH", "")},
@@ -151,7 +184,15 @@ def grade(
     ``timeout`` bounds wall-clock; ``cpu_seconds``/``memory_mb``/``file_mb`` cap
     CPU time, address space, and file writes. ``None`` means "use the configured
     default" (see docsthatrun.config). Defence-in-depth: even a self-authored
-    snippet can loop, allocate, or write forever — the limits contain all three.
+    snippet can loop, allocate, write, or *print* forever — the limits contain
+    all four.
+
+    Output is captured to temp files rather than pipes. A pipe would be read into
+    this process's memory with no ceiling, and neither RLIMIT_AS (which bounds the
+    child, not the parent's buffer) nor RLIMIT_FSIZE (which bounds files, not
+    pipes) constrains that — a snippet printing gigabytes would grow the *server*
+    unboundedly. Redirected to a file, the same write is bounded by RLIMIT_FSIZE
+    at the kernel, and we read back only a tail.
     """
     timeout = timeout if timeout is not None else settings.sandbox_timeout_s
     cpu_seconds = cpu_seconds if cpu_seconds is not None else settings.sandbox_cpu_seconds
@@ -176,6 +217,8 @@ def grade(
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", delete=False, encoding="utf-8"
     )
+    out_f = tempfile.NamedTemporaryFile(suffix=".out", delete=False)
+    err_f = tempfile.NamedTemporaryFile(suffix=".err", delete=False)
     try:
         tmp.write(code)
         tmp.flush()
@@ -188,9 +231,8 @@ def grade(
         # whole group. Env is isolated (empty PYTHONPATH => only the venv's
         # packages are importable).
         popen_kwargs = dict(
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=out_f,
+            stderr=err_f,
             env={"PYTHONPATH": "", "PATH": os.environ.get("PATH", "")},
         )
         if posix:
@@ -205,32 +247,22 @@ def grade(
             cmd = [python, tmp.name]
         proc = subprocess.Popen(cmd, **popen_kwargs)
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_process_tree(proc, posix)
-            # Reap and drain pipes after the kill. Bound this too: a snippet that
-            # setsid-escapes the group (double-fork daemon) can keep the pipe's
-            # write end open, so an unbounded communicate() would block forever.
+            # Reap after the kill, bounded: a snippet that setsid-escapes the
+            # group (double-fork daemon) could otherwise hold us forever. There
+            # is no pipe to drain — output is already on disk.
             try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                for pipe in (proc.stdout, proc.stderr):
-                    try:
-                        if pipe:
-                            pipe.close()
-                    except OSError:  # pragma: no cover
-                        pass
-                stdout, stderr = "", ""
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:  # pragma: no cover
-                    pass
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:  # pragma: no cover
+                pass
             return ExecResult(
                 False,
                 True,
                 returncode=proc.returncode,
-                stdout=stdout or "",
-                stderr=stderr or "",
+                stdout=_read_tail(out_f.name),
+                stderr=_read_tail(err_f.name),
                 reason=f"timed out after {timeout}s",
             )
         passed = proc.returncode == 0
@@ -238,15 +270,21 @@ def grade(
             passed=passed,
             available=True,
             returncode=proc.returncode,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=_read_tail(out_f.name),
+            stderr=_read_tail(err_f.name),
             reason="ok" if passed else "non-zero exit",
         )
     finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:  # pragma: no cover
-            pass
+        for handle in (out_f, err_f):
+            try:
+                handle.close()
+            except OSError:  # pragma: no cover
+                pass
+        for path in (tmp.name, out_f.name, err_f.name):
+            try:
+                os.unlink(path)
+            except OSError:  # pragma: no cover
+                pass
 
 
 if __name__ == "__main__":  # pragma: no cover - manual smoke check

@@ -111,14 +111,28 @@ _CSP = (
     "connect-src 'self'; base-uri 'none'; frame-ancestors 'self'"
 )
 
+# FastAPI's built-in /docs and /redoc pages load Swagger UI / ReDoc from
+# cdn.jsdelivr.net, which the policy above blocks — leaving a blank page where
+# the README promises browsable OpenAPI. Relax it for exactly those two routes
+# rather than globally: the demo UI and every API response keep the strict
+# policy, and the app itself still makes zero external requests.
+_CDN = "https://cdn.jsdelivr.net"
+_CSP_DOCS = (
+    f"default-src 'self'; style-src 'self' 'unsafe-inline' {_CDN}; "
+    f"script-src 'self' 'unsafe-inline' {_CDN}; font-src 'self' {_CDN}; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "connect-src 'self'; base-uri 'none'; frame-ancestors 'self'"
+)
+_DOCS_PATHS = frozenset({"/docs", "/redoc", "/docs/oauth2-redirect"})
 
-def _security_headers(rid: str) -> Dict[str, str]:
+
+def _security_headers(rid: str, path: str = "") -> Dict[str, str]:
     return {
         "x-request-id": rid,
         "x-content-type-options": "nosniff",
         "x-frame-options": "SAMEORIGIN",
         "referrer-policy": "no-referrer",
-        "content-security-policy": _CSP,
+        "content-security-policy": _CSP_DOCS if path in _DOCS_PATHS else _CSP,
     }
 
 
@@ -146,7 +160,7 @@ async def observe(request: Request, call_next):
         log.exception("request_error", extra={"request_id": rid, "path": request.url.path, "latency_ms": latency})
         metrics.record_request(_route_label(request), 500, latency)
         response = JSONResponse(status_code=500, content={"detail": "internal server error"})
-        for k, v in _security_headers(rid).items():
+        for k, v in _security_headers(rid, request.url.path).items():
             response.headers[k] = v
         return response
     latency = round((time.perf_counter() - t0) * 1000, 1)
@@ -159,7 +173,7 @@ async def observe(request: Request, call_next):
             "client_ip": request.client.host if request.client else None,
         },
     )
-    for k, v in _security_headers(rid).items():
+    for k, v in _security_headers(rid, request.url.path).items():
         response.headers[k] = v
     return response
 
@@ -254,7 +268,12 @@ def _grade_outcome(graded: dict) -> str:
 
 
 def _answer(question: str, version: str, execute: bool, top_k: int) -> dict:
-    key = (question.strip(), version, top_k, execute)
+    # Normalize once, then use the normalized form everywhere. Keying on the
+    # stripped question while answering the raw one meant a cache hit echoed the
+    # *first* caller's whitespace back to a later caller — a response quoting a
+    # question that caller never sent.
+    question = question.strip()
+    key = (question, version, top_k, execute)
     hit = answer_cache.get(key)
     if hit is not None:
         out = dict(hit)

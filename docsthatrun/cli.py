@@ -21,7 +21,7 @@ from typing import List, Optional
 
 from .answer import AnswerResult, build_answer
 from .corpus import load_corpus
-from .llm import get_client
+from .llm import CLIENT_NAMES, get_client
 from .retrieve import HybridRetriever
 from .sandbox import sandbox_available
 from .schema import VERSIONS
@@ -151,7 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-execute", dest="execute", action="store_false",
         help="skip running the generated snippet in the sandbox",
     )
-    common.add_argument("--client", default=None, help="anthropic | mock | auto (default auto)")
+    common.add_argument(
+        "--client", default=None, choices=CLIENT_NAMES,
+        help="anthropic | mock | auto (default auto)",
+    )
 
     ask = sub.add_parser("ask", parents=[common], help="answer for one version")
     ask.add_argument("--version", default="v2", help="v1 or v2 (default v2)")

@@ -245,8 +245,20 @@ def _load_fixtures_from_golden() -> Dict[str, Dict[str, object]]:
     return fixtures
 
 
+CLIENT_NAMES = ("auto", "mock", "anthropic")
+
+
 def get_client(name: Optional[str] = None) -> LLMClient:
     name = name or os.environ.get("DOCSTHATRUN_LLM", "auto")
+    if name not in CLIENT_NAMES:
+        # Never silently fall through to "auto" on a typo. `--client mokc` used
+        # to select auto, which with a key exported makes real, billed API calls
+        # when the operator explicitly asked for the offline mock — and, the
+        # other way round, silently grades the answer key when they asked for
+        # Claude. Both produce confidently mislabelled numbers.
+        raise ValueError(
+            f"unknown client {name!r} — expected one of {', '.join(CLIENT_NAMES)}"
+        )
     if name == "mock":
         return MockClient()
     if name == "anthropic":

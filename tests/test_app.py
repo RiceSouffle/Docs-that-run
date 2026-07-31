@@ -97,6 +97,27 @@ def test_rejects_overlong_question():
     assert r.status_code == 422
 
 
+def test_docs_page_csp_allows_its_cdn_but_other_routes_do_not():
+    # FastAPI's /docs loads Swagger UI from cdn.jsdelivr.net; the strict global
+    # CSP blocked it, so the "real OpenAPI at /docs" the README advertises
+    # rendered blank. The relaxation must be scoped to the docs routes only.
+    docs_csp = client.get("/docs").headers["content-security-policy"]
+    assert "cdn.jsdelivr.net" in docs_csp
+    for path in ("/", "/health"):
+        assert "cdn.jsdelivr.net" not in client.get(path).headers["content-security-policy"]
+
+
+def test_cached_response_echoes_the_callers_own_question():
+    # The key was stripped but the payload stored the first caller's raw string,
+    # so a later caller got a response quoting a question they never sent.
+    answer_cache.clear()
+    q = "In Pydantic v2, how do I serialize a model instance to a dictionary?"
+    client.post("/ask", json={"question": "   " + q + "   ", "version": "v2"})
+    second = client.post("/ask", json={"question": q, "version": "v2"}).json()
+    assert second["meta"]["cached"] is True
+    assert second["question"] == q
+
+
 def test_ready_returns_503_when_corpus_empty(monkeypatch):
     # Readiness consumers (k8s probes, LBs) act on the status code — "ready":
     # false inside a 200 would still get traffic routed to a broken instance.

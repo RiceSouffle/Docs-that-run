@@ -83,6 +83,42 @@ def test_argv_matches_direct_execution():
     assert grade("import argparse\nargparse.ArgumentParser().parse_args()\n", "v2").passed
 
 
+@needs_sandbox
+def test_flood_of_stdout_does_not_balloon_this_process():
+    """Output volume is the one axis the rlimits used to miss: stdout went
+    through a pipe into an unbounded parent buffer, so a snippet printing
+    gigabytes grew the *server*, not the sandbox. Output now goes to a file
+    (bounded by RLIMIT_FSIZE) and only a tail is read back."""
+    import resource
+
+    def rss_bytes():
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return r if sys.platform == "darwin" else r * 1024
+
+    before = rss_bytes()
+    res = grade(
+        "import sys\nbuf='x'*(1<<20)\nfor _ in range(256): sys.stdout.write(buf)\n",
+        "v2",
+        file_mb=2,
+    )
+    growth_mb = (rss_bytes() - before) / (1024 * 1024)
+    # 256 MiB written; the parent must not have absorbed it.
+    assert growth_mb < 64, f"parent grew {growth_mb:.0f} MB reading child output"
+    assert len(res.stdout) <= 64 * 1024
+    assert not res.passed  # RLIMIT_FSIZE stops the flood, so the snippet fails
+
+
+@needs_sandbox
+def test_v2_probe_requires_pydantic_settings():
+    """The v2 golden set uses pydantic_settings, so a v2 venv without it is not
+    usable — reporting it available charges the ModuleNotFoundError to answer
+    quality instead of to the environment."""
+    from docsthatrun.sandbox import _PROBE_IMPORTS
+
+    assert "pydantic_settings" in _PROBE_IMPORTS["v2"]
+    assert "pydantic_settings" not in _PROBE_IMPORTS["v1"]  # v1 has no such split
+
+
 def test_sandbox_available_does_not_cache_failure(tmp_path, monkeypatch):
     """A probe that races `make sandbox` (venv exists, pydantic mid-install)
     must not disable grading for the process lifetime: failure is re-probed,

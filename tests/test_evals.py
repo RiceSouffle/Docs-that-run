@@ -144,6 +144,32 @@ def test_mock_fixture_collision_fails_loud(monkeypatch):
         llm._load_fixtures_from_golden()
 
 
+def test_unknown_client_name_raises_instead_of_falling_through():
+    # `--client mokc` used to silently select "auto", which with a key exported
+    # makes real billed API calls when the operator asked for the offline mock
+    # (and vice versa) — producing confidently mislabelled numbers.
+    from docsthatrun.llm import get_client
+
+    with pytest.raises(ValueError, match="unknown client"):
+        get_client("mokc")
+
+
+def test_grading_is_per_version_not_a_single_and(monkeypatch):
+    """One broken venv must not stop the *other*, healthy version from being
+    graded — that turned every item into `not_graded` while the gate, which
+    skips the executable check when the sandbox is down, still passed."""
+    from docsthatrun.evals import run_evals as re_
+
+    monkeypatch.setattr(re_, "sandbox_available", lambda v: v == "v2")
+    report = re_.evaluate(run_answers=True, client_name="mock")
+
+    assert report["sandbox_by_version"] == {"v1": False, "v2": True}
+    assert report["sandbox_available"] is False
+    rows = {r["id"]: r for r in report["answers"]["rows"]}
+    v2_graded = [r for r in rows.values() if "executed" in r]
+    assert v2_graded, "healthy v2 sandbox should still have graded its items"
+
+
 @pytest.mark.parametrize("bad", ["0", "-1", "51"])
 def test_run_evals_rejects_out_of_range_top_k(bad, capsys):
     # Unvalidated --top-k silently corrupted every metric (0 retrieves nothing,

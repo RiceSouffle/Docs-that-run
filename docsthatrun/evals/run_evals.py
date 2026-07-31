@@ -26,7 +26,7 @@ from typing import List, Optional
 
 from ..answer import AnswerResult, build_answer
 from ..corpus import load_corpus
-from ..llm import get_client
+from ..llm import CLIENT_NAMES, get_client
 from ..retrieve import HybridRetriever
 from ..sandbox import sandbox_available
 from ..schema import GoldenItem
@@ -178,8 +178,14 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
     # ---- Layers 2 & 3: answers, execution grading, abstention --------------
     client = get_client(client_name)
     report["client"] = type(client).__name__
-    sandbox_up = sandbox_available("v1") and sandbox_available("v2")
+    # Per-version, not a single AND across both: with one venv broken, a global
+    # flag would also stop grading the *healthy* version, turn all 25 items into
+    # `not_graded`, and — since the executable gate is skipped when the sandbox
+    # is down — let the run report GATE PASSED having executed nothing.
+    sandbox_by_version = {v: sandbox_available(v) for v in ("v1", "v2")}
+    sandbox_up = all(sandbox_by_version.values())
     report["sandbox_available"] = sandbox_up
+    report["sandbox_by_version"] = sandbox_by_version
 
     executable_hits, gradable = 0, 0
     should_run = 0  # non-abstained answerable items: the executable_pct denominator
@@ -190,7 +196,11 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
     for item in golden:
         t0 = time.perf_counter()
         res = build_answer(item.question, item.version, retriever, client=client, top_k=top_k)
-        if not res.answer.abstained and (res.answer.code or "").strip() and sandbox_up:
+        if (
+            not res.answer.abstained
+            and (res.answer.code or "").strip()
+            and sandbox_by_version.get(item.version, False)
+        ):
             res.execution_grade()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         latencies.append(latency_ms)
@@ -304,7 +314,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="retrieval depth, 1-50 (default 5). Metrics are computed at this "
              "depth, so compare runs at the same value.",
     )
-    parser.add_argument("--client", default=None, help="anthropic | mock | auto")
+    parser.add_argument(
+        "--client", default=None, choices=CLIENT_NAMES, help="anthropic | mock | auto"
+    )
     parser.add_argument("--json", default=None, help="write full report to this path")
     args = parser.parse_args(argv)
     # Mirror the CLI/API bound: 0 retrieves nothing and a negative value slices
