@@ -81,3 +81,26 @@ def test_argv_matches_direct_execution():
     exactly as `python file.py` would — else argparse/argv snippets false-fail."""
     assert grade("import sys\nassert len(sys.argv) == 1\n", "v2").passed
     assert grade("import argparse\nargparse.ArgumentParser().parse_args()\n", "v2").passed
+
+
+def test_sandbox_available_does_not_cache_failure(tmp_path, monkeypatch):
+    """A probe that races `make sandbox` (venv exists, pydantic mid-install)
+    must not disable grading for the process lifetime: failure is re-probed,
+    success is cached. Runs without real venvs — the probe python is faked."""
+    import docsthatrun.sandbox as sb
+
+    monkeypatch.setattr(sb, "_IMPORT_OK", {})
+    failing = tmp_path / "python_failing"
+    failing.write_text("#!/bin/sh\nexit 1\n")
+    failing.chmod(0o755)
+    monkeypatch.setitem(sb.VENV_PYTHON, "v2", str(failing))
+    assert sb.sandbox_available("v2") is False
+    assert "v2" not in sb._IMPORT_OK  # the failure was NOT cached
+
+    # ...the install finishes (import now succeeds): availability self-heals.
+    working = tmp_path / "python_working"
+    working.write_text("#!/bin/sh\nexit 0\n")
+    working.chmod(0o755)
+    monkeypatch.setitem(sb.VENV_PYTHON, "v2", str(working))
+    assert sb.sandbox_available("v2") is True
+    assert sb._IMPORT_OK.get("v2") is True  # success IS cached

@@ -33,7 +33,7 @@ interviewer would probe.
   number.
 
 ### Milestone 2 — Real, messy corpus
-- Replace the 18 hand-written chunks with ingested Pydantic docs for one v1 and
+- Replace the 27 hand-written chunks with ingested Pydantic docs for one v1 and
   one v2 release: markdown, changelog, and a sample of version-tagged GitHub
   issues / Stack Overflow answers.
 - **This is where the project is won or lost:** version-tagging real Q&A is
@@ -64,7 +64,7 @@ interviewer would probe.
   drift-regression report.
 
 ### Milestone 6 — Tell the story
-- A `DECISIONS.md`-style blog post: the version-lock finding (62% crisp), the
+- A `DECISIONS.md`-style blog post: the version-lock finding (68% crisp), the
   honest recall drop on real docs, and the execution-grading design. This is the
   artifact that gets read in an interview.
 

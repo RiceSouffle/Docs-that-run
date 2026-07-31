@@ -29,7 +29,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 try:
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException, Request, Response
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
@@ -52,7 +52,7 @@ from docsthatrun.schema import VERSIONS
 configure_logging(settings.log_level, settings.log_json)
 log = logging.getLogger("docsthatrun.api")
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 
 metrics = Metrics()
 answer_cache = TTLCache(settings.cache_max, settings.cache_ttl_s)
@@ -104,16 +104,6 @@ async def lifespan(app: "FastAPI"):
 
 app = FastAPI(title="DocsThatRun", version=APP_VERSION, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
-
-if settings.cors_origins:  # opt-in; same-origin UI needs none
-    from fastapi.middleware.cors import CORSMiddleware
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.cors_origins),
-        allow_methods=["GET", "POST"],
-        allow_headers=["*"],
-    )
 
 _CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -172,6 +162,21 @@ async def observe(request: Request, call_next):
     for k, v in _security_headers(rid).items():
         response.headers[k] = v
     return response
+
+
+# Registered AFTER `observe` so CORS is the *outermost* layer (Starlette: last
+# added wraps everything). If it were inside, the unhandled-500 built in
+# `observe` would leave without an Access-Control-Allow-Origin header and a
+# cross-origin caller would see an opaque network error instead of a 500.
+if settings.cors_origins:  # opt-in; same-origin UI needs none
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
 
 
 # ---- request / response models --------------------------------------------
@@ -298,9 +303,13 @@ def health() -> dict:
 
 
 @app.get("/ready")
-def ready() -> dict:
+def ready(response: Response) -> dict:
     corpus_ok = len(get_retriever().chunks) > 0
     sandbox = {v: sandbox_available(v) for v in VERSIONS}
+    if not corpus_ok:
+        # Probes (k8s readinessProbe, LB health checks) act on the status code,
+        # not the body — "ready": false inside a 200 would still get traffic.
+        response.status_code = 503
     return {"ready": corpus_ok, "corpus": corpus_ok, "sandbox": sandbox}
 
 
@@ -329,9 +338,21 @@ def examples() -> dict:
     return {"answerable": answerable, "unanswerable": unanswerable}
 
 
+def _client_key(request: Request) -> str:
+    """Rate-limit key: the direct TCP peer, unless DOCSTHATRUN_TRUST_PROXY is
+    set — behind a reverse proxy every client arrives from the proxy's IP, so
+    without the header they'd all share one bucket (one user's burst 429s
+    everyone). Off by default because X-Forwarded-For is client-spoofable when
+    no trusted proxy is overwriting it."""
+    if settings.trust_proxy:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "anon"
+
+
 def _rate_limit(request: Request) -> None:
-    ip = request.client.host if request.client else "anon"
-    ok, retry = limiter.allow(ip)
+    ok, retry = limiter.allow(_client_key(request))
     if not ok:
         raise HTTPException(
             status_code=429,

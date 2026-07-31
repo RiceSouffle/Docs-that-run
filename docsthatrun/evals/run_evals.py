@@ -84,7 +84,10 @@ def _classify_outcome(item: GoldenItem, res: AnswerResult) -> str:
         return "retrieval_miss"
     if res.answer.abstained:
         return "over_abstention"
-    if not res.answer.code:
+    # strip(): whitespace-only "code" is still no code — without it, "  \n"
+    # reaches the sandbox, fails with an empty stderr, and lands in
+    # runtime_error, blaming the wrong stage.
+    if not (res.answer.code or "").strip():
         return "no_code"
     if ex is None or not ex.available:
         return "not_graded"
@@ -179,6 +182,7 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
     report["sandbox_available"] = sandbox_up
 
     executable_hits, gradable = 0, 0
+    should_run = 0  # non-abstained answerable items: the executable_pct denominator
     answerable_over_abstain = 0
     answer_rows = []
     taxonomy: Counter = Counter()
@@ -186,7 +190,7 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
     for item in golden:
         t0 = time.perf_counter()
         res = build_answer(item.question, item.version, retriever, client=client, top_k=top_k)
-        if not res.answer.abstained and res.answer.code and sandbox_up:
+        if not res.answer.abstained and (res.answer.code or "").strip() and sandbox_up:
             res.execution_grade()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         latencies.append(latency_ms)
@@ -195,6 +199,8 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
         taxonomy[outcome] += 1
         if res.answer.abstained:
             answerable_over_abstain += 1
+        else:
+            should_run += 1
         if res.execution is not None:
             gradable += 1
             if res.execution.passed:
@@ -218,7 +224,15 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
             abstained_correct += 1
 
     report["answers"] = {
-        "executable_pct": round(executable_hits / gradable, 3) if gradable else None,
+        # Denominator: every answerable item that *claimed* an answer (didn't
+        # abstain), not just the ones that produced code. An answer with no
+        # runnable snippet counts as a failure here — with the old
+        # graded-only denominator, a client emitting empty code for 40% of
+        # items still scored executable_pct=1.0 and passed the gate.
+        "executable_pct": (
+            round(executable_hits / should_run, 3) if (sandbox_up and should_run) else None
+        ),
+        "answered_count": should_run,
         "gradable_count": gradable,
         "answerable_over_abstention": round(
             answerable_over_abstain / len(golden), 3
@@ -266,11 +280,13 @@ def check_gate(report: dict) -> List[str]:
         if report.get("sandbox_available"):
             pct = answers["executable_pct"]
             if pct is None:
-                # Sandbox is up but nothing was gradable (every answer abstained
-                # or produced empty code). That's a regression, not a pass — the
-                # old `is not None` guard silently skipped the gate here.
+                # Sandbox is up but every answerable item abstained. That's a
+                # regression, not a pass — the old `is not None` guard silently
+                # skipped the gate here. (Partial abstention is caught by the
+                # over-abstention gate; empty-code answers now drag pct down
+                # directly, so neither needs a separate check.)
                 failures.append(
-                    "no gradable answers (gradable_count=0) while the sandbox is up"
+                    "nothing to grade (every answerable item abstained) while the sandbox is up"
                 )
             elif pct < GATE["executable_pct_min"]:
                 failures.append(
@@ -283,10 +299,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="DocsThatRun eval harness")
     parser.add_argument("--answers", action="store_true", help="run LLM + sandbox layers")
     parser.add_argument("--gate", action="store_true", help="exit non-zero on threshold miss")
-    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--top-k", type=int, default=5,
+        help="retrieval depth, 1-50 (default 5). Metrics are computed at this "
+             "depth, so compare runs at the same value.",
+    )
     parser.add_argument("--client", default=None, help="anthropic | mock | auto")
     parser.add_argument("--json", default=None, help="write full report to this path")
     args = parser.parse_args(argv)
+    # Mirror the CLI/API bound: 0 retrieves nothing and a negative value slices
+    # off the *top* results — both silently corrupt every metric downstream.
+    if not (1 <= args.top_k <= 50):
+        parser.error("--top-k must be between 1 and 50")
 
     report = evaluate(run_answers=args.answers, top_k=args.top_k, client_name=args.client)
 
@@ -301,7 +325,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if report.get("answers"):
         a = report["answers"]
         print(f"client={report['client']}  sandbox={report['sandbox_available']}")
-        print(f"answers: executable%={a['executable_pct']} (n={a['gradable_count']})  "
+        print(f"answers: executable%={a['executable_pct']} (n={a['answered_count']} answered)  "
               f"unanswerable_abstention={a['unanswerable_abstention']}  "
               f"answerable_over_abstention={a['answerable_over_abstention']}")
         if a.get("taxonomy"):

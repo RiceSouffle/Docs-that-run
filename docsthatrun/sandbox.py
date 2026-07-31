@@ -109,27 +109,33 @@ def sandbox_available(version: str) -> bool:
     the venv before ``pip install`` runs, so an interrupted setup leaves a
     ``bin/python`` with no pydantic. Reporting that as "available" would grade
     every snippet as a failing ``ModuleNotFoundError`` and misattribute it to
-    answer quality. We probe ``import pydantic`` once per version and cache it.
+    answer quality. We probe ``import pydantic`` and cache *success only*.
     """
     python = VENV_PYTHON.get(version, "")
     if not python or not os.path.exists(python):
         return False
-    if version not in _IMPORT_OK:
-        try:
-            proc = subprocess.run(
-                [python, "-c", "import pydantic"],
-                capture_output=True,
-                timeout=15,
-                env={"PYTHONPATH": "", "PATH": os.environ.get("PATH", "")},
-            )
-        except (OSError, subprocess.SubprocessError):
-            # Transient (fork EAGAIN under load, or the probe timing out while the
-            # venv is still being populated). Don't cache — a later call retries,
-            # so a momentary hiccup can't permanently disable grading.
-            return False
-        # Only a clean run gives a *definitive* answer worth caching.
-        _IMPORT_OK[version] = proc.returncode == 0
-    return _IMPORT_OK[version]
+    if version in _IMPORT_OK:
+        return True
+    try:
+        proc = subprocess.run(
+            [python, "-c", "import pydantic"],
+            capture_output=True,
+            timeout=15,
+            env={"PYTHONPATH": "", "PATH": os.environ.get("PATH", "")},
+        )
+    except (OSError, subprocess.SubprocessError):
+        # Transient (fork EAGAIN under load, or the probe timing out while the
+        # venv is still being populated). Don't cache — a later call retries,
+        # so a momentary hiccup can't permanently disable grading.
+        return False
+    if proc.returncode != 0:
+        # Import failed — usually a venv whose `pip install` is still running
+        # (or was interrupted). Equally transient, equally uncached: a probe
+        # racing `make sandbox` must not disable grading for the process
+        # lifetime. Only success is definitive.
+        return False
+    _IMPORT_OK[version] = True
+    return True
 
 
 def grade(

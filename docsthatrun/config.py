@@ -69,6 +69,11 @@ class Settings:
     # ---- rate limiting (per client IP, token bucket) ------------------------
     rate_limit_rpm: int = 60           # sustained requests/min; 0 disables
     rate_limit_burst: int = 20         # bucket capacity
+    trust_proxy: bool = False          # key limits on X-Forwarded-For's first hop.
+                                       # Opt-in: only enable behind a proxy that
+                                       # overwrites the header, else it's spoofable
+                                       # (and off-proxy, all clients would share
+                                       # the proxy IP's single bucket).
 
     # ---- server -------------------------------------------------------------
     cors_origins: Tuple[str, ...] = ()
@@ -94,6 +99,7 @@ class Settings:
             cache_ttl_s=_float("DOCSTHATRUN_CACHE_TTL", cls.cache_ttl_s),
             rate_limit_rpm=_int("DOCSTHATRUN_RATE_RPM", cls.rate_limit_rpm),
             rate_limit_burst=_int("DOCSTHATRUN_RATE_BURST", cls.rate_limit_burst),
+            trust_proxy=_bool("DOCSTHATRUN_TRUST_PROXY", cls.trust_proxy),
             cors_origins=_csv("DOCSTHATRUN_CORS_ORIGINS", cls.cors_origins),
             log_level=os.environ.get("DOCSTHATRUN_LOG_LEVEL", cls.log_level).upper(),
             log_json=_bool("DOCSTHATRUN_LOG_JSON", cls.log_json),

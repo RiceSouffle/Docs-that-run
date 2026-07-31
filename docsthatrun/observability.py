@@ -39,9 +39,16 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
 def configure_logging(level: str = "INFO", json_logs: bool = True) -> None:
     root = logging.getLogger()
-    root.setLevel(level)
+    # Fail safe like every other config knob: a bad DOCSTHATRUN_LOG_LEVEL
+    # ("TRACE", "", "INFO " from an .env file) must not crash the server at
+    # import — root.setLevel raises ValueError on unknown names.
+    level = (level or "").strip().upper()
+    root.setLevel(level if level in _LEVELS else "INFO")
     for h in list(root.handlers):
         root.removeHandler(h)
     handler = logging.StreamHandler(sys.stdout)

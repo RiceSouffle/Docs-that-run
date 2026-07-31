@@ -5,7 +5,7 @@
 [![evals](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml/badge.svg)](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![core deps](https://img.shields.io/badge/core%20dependencies-0-brightgreen)
-![tests](https://img.shields.io/badge/tests-68%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-81%20passing-brightgreen)
 ![lint](https://img.shields.io/badge/lint-ruff-black)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -128,11 +128,14 @@ just demoed. All of it is env-driven (see [`docsthatrun/config.py`](docsthatrun/
 - **Answer cache** (LRU + TTL) — repeat queries skip the subprocess and return
   in ~1 ms; responses carry `meta.cached`.
 - **Per-IP token-bucket rate limiting** on the expensive endpoints, with
-  `Retry-After` on 429.
+  `Retry-After` on 429. Behind a reverse proxy, set `DOCSTHATRUN_TRUST_PROXY=1`
+  to key on `X-Forwarded-For` (off by default — the header is spoofable
+  without a proxy overwriting it).
 - **Hardened HTTP**: typed request/response models (real OpenAPI at `/docs`),
   bounded inputs, `content-security-policy` + `x-frame-options` +
   `x-content-type-options`, a warmed thread-safe retriever/client, and a
-  `/ready` readiness probe.
+  `/ready` readiness probe that returns a real **503** when the corpus is
+  missing (probes act on status codes, not JSON bodies).
 - **Container**: [`Dockerfile`](Dockerfile) runs as a non-root user with a
   `HEALTHCHECK`; `ruff` lint gates CI alongside the eval gate.
 

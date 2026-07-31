@@ -213,20 +213,35 @@ def _load_fixtures_from_golden() -> Dict[str, Dict[str, object]]:
     from .evals.run_evals import load_golden, load_unanswerable  # lazy import
 
     fixtures: Dict[str, Dict[str, object]] = {}
+
+    def _put(item, fixture) -> None:
+        # Fixtures key on normalized question text, so two golden items with
+        # the same wording (e.g. a v1 and a v2 variant, or a question that also
+        # appears in the unanswerable set) would silently replay the wrong
+        # answer. Fail loud at load time instead — the data files are
+        # committed, so CI catches the collision immediately.
+        key = _norm(item.question)
+        if key in fixtures:
+            raise ValueError(
+                f"duplicate MockClient fixture question ({item.id}): {item.question!r} "
+                "— disambiguate the question text in the golden/unanswerable data"
+            )
+        fixtures[key] = fixture
+
     for item in load_golden():
-        fixtures[_norm(item.question)] = {
+        _put(item, {
             "answer": f"See docs {', '.join(item.relevant_chunk_ids)}.",
             "code": item.check,
             "citations": list(item.relevant_chunk_ids),
             "abstained": False,
-        }
+        })
     for item in load_unanswerable():
-        fixtures[_norm(item.question)] = {
+        _put(item, {
             "answer": "I don't have documentation that covers this.",
             "code": "",
             "citations": [],
             "abstained": True,
-        }
+        })
     return fixtures
 
 

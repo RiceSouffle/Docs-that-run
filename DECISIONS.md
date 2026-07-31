@@ -96,10 +96,15 @@ defects, now fixed and pinned by regression tests:
 - **`sandbox_available` checks that pydantic actually imports**, not just that
   `bin/python` exists — an interrupted `setup_sandbox.sh` leaves a venv with no
   package, which would otherwise mislabel every answer as a quality failure.
+  Only a *successful* probe is cached: a probe that races a still-running
+  `make sandbox` re-checks later instead of disabling grading for the process
+  lifetime.
 - **The CI gate no longer silently passes when nothing is gradable.** If the
-  sandbox is up but every answer abstained or produced no code, `executable_pct`
-  is `None`; the old guard skipped the check, so a total collapse looked like a
-  pass. It's now an explicit gate failure.
+  sandbox is up but every answer abstained, `executable_pct` is `None`; the old
+  guard skipped the check, so a total collapse looked like a pass. It's now an
+  explicit gate failure. And `executable_pct`'s denominator is every answer
+  that *claimed* to answer (didn't abstain) — an answer with no runnable code
+  counts against the number instead of being silently excluded from it.
 - **API inputs are bounded** (`top_k` constrained; unknown versions 400) and
   generation failures return a clean `502` rather than leaking a stack trace.
 

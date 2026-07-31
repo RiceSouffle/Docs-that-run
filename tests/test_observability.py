@@ -3,7 +3,7 @@
 import json
 import logging
 
-from docsthatrun.observability import JsonFormatter, Metrics
+from docsthatrun.observability import JsonFormatter, Metrics, configure_logging
 
 
 def test_metrics_counts_and_prometheus_render():
@@ -33,3 +33,19 @@ def test_json_formatter_includes_structured_extras():
     assert out["level"] == "INFO"
     assert out["request_id"] == "abc123"
     assert out["status"] == 200
+
+
+def test_configure_logging_survives_bad_level():
+    # A bad DOCSTHATRUN_LOG_LEVEL used to raise ValueError at import and kill
+    # the server before boot; it must fall back to INFO like every other knob.
+    root = logging.getLogger()
+    original = root.level
+    try:
+        configure_logging("TRACE")          # not a Python level name
+        assert root.level == logging.INFO
+        configure_logging("")               # empty env value
+        assert root.level == logging.INFO
+        configure_logging(" warning ")      # sloppy .env whitespace + case
+        assert root.level == logging.WARNING
+    finally:
+        root.setLevel(original)

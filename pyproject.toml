@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docsthatrun"
-version = "0.3.0"
+version = "0.3.1"
 description = "Version-aware documentation RAG with execution-graded answers (Pydantic v1 -> v2)"
 readme = "README.md"
 requires-python = ">=3.9"

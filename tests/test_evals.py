@@ -90,3 +90,65 @@ def test_retrieval_miss_only_when_not_passing():
     assert _classify_outcome(_ITEM, _fake_res(["other"], ex=ex)) == "retrieval_miss"
     # gold retrieved but failed on the assert -> attributed to the assert
     assert _classify_outcome(_ITEM, _fake_res(["gold"], ex=ex)) == "wrong_assert"
+
+
+def test_whitespace_only_code_is_no_code_not_runtime_error():
+    # "  \n" is truthy, so the old `if not res.answer.code` let it through to
+    # the sandbox, where it failed with empty stderr -> runtime_error, blaming
+    # the wrong stage.
+    assert _classify_outcome(_ITEM, _fake_res(["gold"], code="  \n")) == "no_code"
+
+
+def test_empty_code_answers_count_against_executable_pct(monkeypatch):
+    """A client that answers (doesn't abstain) but emits no runnable code used
+    to be silently dropped from the executable_pct denominator — 40% no-code
+    could still report 1.0 and pass the gate."""
+    from docsthatrun import llm
+    from docsthatrun.evals import run_evals as re_
+    from docsthatrun.sandbox import sandbox_available
+
+    if not (sandbox_available("v1") and sandbox_available("v2")):
+        pytest.skip("sandbox venvs not set up")
+
+    class SometimesNoCode(llm.MockClient):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def generate(self, question, version, retrieved):
+            out = dict(super().generate(question, version, retrieved))
+            self.calls += 1
+            if not out["abstained"] and self.calls % 5 == 0:
+                out["code"] = "   \n"  # answered, but nothing runnable
+            return out
+
+    monkeypatch.setattr(re_, "get_client", lambda name=None: SometimesNoCode())
+    answers = re_.evaluate(run_answers=True, client_name="ignored")["answers"]
+
+    no_code = answers["taxonomy"].get("no_code", 0)
+    assert no_code > 0
+    expected = round((answers["answered_count"] - no_code) / answers["answered_count"], 3)
+    assert answers["executable_pct"] == expected < 1.0
+
+
+def test_mock_fixture_collision_fails_loud(monkeypatch):
+    # Two golden items with identical normalized question text would silently
+    # replay whichever fixture loaded last; the loader must refuse instead.
+    from docsthatrun import llm
+    from docsthatrun.evals import run_evals as re_
+
+    dup = SimpleNamespace(id="dup", question="Same question?", relevant_chunk_ids=[], check="")
+    monkeypatch.setattr(re_, "load_golden", lambda: [dup, dup])
+    monkeypatch.setattr(re_, "load_unanswerable", lambda: [])
+    with pytest.raises(ValueError, match="duplicate MockClient fixture"):
+        llm._load_fixtures_from_golden()
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "51"])
+def test_run_evals_rejects_out_of_range_top_k(bad, capsys):
+    # Unvalidated --top-k silently corrupted every metric (0 retrieves nothing,
+    # negative slices off the top results).
+    from docsthatrun.evals.run_evals import main
+
+    with pytest.raises(SystemExit):
+        main(["--top-k", bad])

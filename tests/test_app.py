@@ -97,6 +97,38 @@ def test_rejects_overlong_question():
     assert r.status_code == 422
 
 
+def test_ready_returns_503_when_corpus_empty(monkeypatch):
+    # Readiness consumers (k8s probes, LBs) act on the status code — "ready":
+    # false inside a 200 would still get traffic routed to a broken instance.
+    from types import SimpleNamespace
+
+    import app.main as m
+
+    monkeypatch.setattr(m, "get_retriever", lambda: SimpleNamespace(chunks=[]))
+    r = client.get("/ready")
+    assert r.status_code == 503
+    assert r.json()["ready"] is False
+
+
+def test_rate_limit_key_honors_forwarded_header_only_when_trusted(monkeypatch):
+    import dataclasses
+
+    import app.main as m
+
+    req = m.Request({
+        "type": "http",
+        "headers": [(b"x-forwarded-for", b"203.0.113.9, 10.0.0.2")],
+        "client": ("10.0.0.1", 1234),
+    })
+    # Default: the direct TCP peer. The header is client-spoofable, so it must
+    # be ignored unless a trusted proxy is explicitly declared.
+    assert m._client_key(req) == "10.0.0.1"
+    monkeypatch.setattr(m, "settings", dataclasses.replace(m.settings, trust_proxy=True))
+    # Behind a trusted proxy: the first forwarded hop, so distinct clients get
+    # distinct buckets instead of all sharing the proxy IP's one.
+    assert m._client_key(req) == "203.0.113.9"
+
+
 def test_security_headers_on_unhandled_500(monkeypatch):
     # Force an unhandled error inside a route; the middleware must still return a
     # clean 500 carrying the security headers + request id (not a bare 500).

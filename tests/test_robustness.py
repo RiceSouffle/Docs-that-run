@@ -67,10 +67,11 @@ def _base_report(executable_pct, sandbox=True):
 
 
 def test_gate_fails_when_sandbox_up_but_nothing_gradable():
-    # executable_pct is None when gradable_count == 0. With the sandbox up that
-    # is a regression, and the gate must catch it (it used to silently skip).
+    # executable_pct is None when every answerable item abstained. With the
+    # sandbox up that is a regression, and the gate must catch it (it used to
+    # silently skip).
     failures = check_gate(_base_report(None, sandbox=True))
-    assert any("gradable" in f for f in failures)
+    assert any("nothing to grade" in f for f in failures)
 
 
 def test_gate_fails_on_low_executable_pct():

@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# A newer push supersedes any still-running build of the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   eval-gate:
     runs-on: ubuntu-latest
@@ -11,8 +16,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        id: py
         with:
           python-version: "3.11"
+          cache: pip
+
+      # The sandbox venvs embed the interpreter path, so key the cache on the
+      # exact patch version (a runner-image Python bump would break stale venvs).
+      - name: Cache sandbox venvs
+        uses: actions/cache@v4
+        with:
+          path: .venvs
+          key: sandbox-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ hashFiles('scripts/setup_sandbox.sh') }}
 
       - name: Build the pinned-version sandbox venvs
         run: bash scripts/setup_sandbox.sh
@@ -39,3 +54,17 @@ jobs:
         with:
           name: eval-report
           path: results/ci-report.json
+
+  # Proves the README claim, not just states it: the retrieval + eval core runs
+  # on a bare Python 3.9 with zero pip installs.
+  core-stdlib-py39:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Retrieval evals on bare stdlib (no pip install)
+        run: python -m docsthatrun.evals.run_evals
