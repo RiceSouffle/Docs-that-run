@@ -184,6 +184,12 @@ data (27 doc chunks, 25 answerable golden questions, 6 unanswerable):
 | terminal CLI (`ask` / `compare`) | [`docsthatrun/cli.py`](docsthatrun/cli.py) |
 | container image (non-root, healthcheck) | [`Dockerfile`](Dockerfile) · [`docker-compose.yml`](docker-compose.yml) |
 | design decisions & tradeoffs | [`DECISIONS.md`](DECISIONS.md) |
+| full explainer, from zero knowledge | [`GUIDE.md`](GUIDE.md) |
+
+New to any of this? **[GUIDE.md](GUIDE.md) explains the whole project from
+zero** — the problem, every concept it rests on (RAG, BM25, RRF, execution
+grading, sandboxing, recall/MRR, CI gates), a step-by-step trace of one question
+through the system, and a frank account of what the numbers do and do not prove.
 
 See [DECISIONS.md](DECISIONS.md) for why each choice was made (and its honest
 limitations), and [ROADMAP.md](ROADMAP.md) for the path from this slice to a

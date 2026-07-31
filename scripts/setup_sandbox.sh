@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the two pinned-version sandbox venvs used by the execution grader.
-# Idempotent: skips a venv that already has the right pydantic installed.
+# Safe to re-run: venv creation is skipped when the interpreter already exists,
+# and pip install is a no-op once the requirement is satisfied.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

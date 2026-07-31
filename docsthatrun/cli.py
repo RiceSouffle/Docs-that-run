@@ -177,8 +177,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     retriever = HybridRetriever(load_corpus())
     client = get_client(args.client)
 
-    if not (os.environ.get("ANTHROPIC_API_KEY") or args.client == "anthropic"):
-        print(c.dim(f"· using {type(client).__name__} (offline; set ANTHROPIC_API_KEY for real Claude answers)"))
+    # Key the notice off the client actually built, not the environment: with a
+    # key exported but `--client mock` passed, the old check stayed silent while
+    # answers really were coming from the offline fixture replay.
+    if type(client).__name__ == "MockClient":
+        print(c.dim("· using MockClient (offline; set ANTHROPIC_API_KEY for real Claude answers)"))
 
     if args.command == "ask":
         return cmd_ask(args, retriever, client, c)

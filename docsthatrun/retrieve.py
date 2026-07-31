@@ -28,7 +28,6 @@ RRF_K = 60
 class HybridRetriever:
     def __init__(self, chunks: List[Chunk]):
         self.chunks = list(chunks)
-        self._doc_tokens: Dict[str, List[str]] = {}
         self._doc_tf: Dict[str, Counter] = {}
         self._doc_len: Dict[str, int] = {}
         self._df: Counter = Counter()
@@ -40,7 +39,6 @@ class HybridRetriever:
         for chunk in self.chunks:
             tokens = tokenize(chunk.indexable_text())
             tf = Counter(tokens)
-            self._doc_tokens[chunk.id] = tokens
             self._doc_tf[chunk.id] = tf
             self._doc_len[chunk.id] = len(tokens)
             for term in tf:
@@ -48,8 +46,10 @@ class HybridRetriever:
 
         n = max(len(self.chunks), 1)
         for term, df in self._df.items():
-            # BM25 idf with the standard +0.5 smoothing, floored at a small
-            # positive value so ubiquitous terms never go negative.
+            # BM25+ idf: the +1.0 inside the log is what keeps this positive even
+            # for a term in every document (classic BM25 idf goes negative there).
+            # The floor is belt-and-braces for a degenerate corpus; it never binds
+            # on real input, where the minimum is ln(1 + 0.5/(n+0.5)) > 0.
             self._idf[term] = max(math.log((n - df + 0.5) / (df + 0.5) + 1.0), 1e-6)
 
         # Precompute TF-IDF vector norms per document for cosine.

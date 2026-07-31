@@ -41,4 +41,5 @@ docker:
 	docker build -t docsthatrun . && docker run --rm -p 8000:8000 docsthatrun
 
 clean:
-	rm -rf .venvs results **/__pycache__ .pytest_cache
+	rm -rf .venvs results .pytest_cache
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +

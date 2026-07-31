@@ -1,0 +1,8 @@
+# Runtime dependencies for the container image (see Dockerfile).
+# Deliberately excludes test tooling — pytest/httpx/ruff belong in CI, not in a
+# production image. The full development set is in requirements.txt.
+#
+# The core (retrieval, sandbox, evals with MockClient) still needs none of this.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+anthropic>=0.40

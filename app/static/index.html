@@ -154,6 +154,7 @@
   }
   .ex:hover { border-color: var(--amber-2); }
   .ex.na { color: var(--dim); }
+  .ex-note { font-family: var(--mono); font-size: 12px; color: var(--fail); }
 
   /* version tag */
   .vt { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .05em; padding: 1px 5px; border: 1px solid; }
@@ -245,7 +246,7 @@
   <header>
     <div class="brand">
       <span class="name">docs<b>·</b>that<b>·</b>run</span>
-      <span class="build" id="build">v0.3 · execution-graded rag</span>
+      <span class="build" id="build">execution-graded rag</span>
     </div>
     <div class="status">
       <span class="readout" id="clientRO"><span class="led warn" id="clientLed"></span>CLIENT: <b id="clientTxt">…</b></span>
@@ -337,7 +338,15 @@
       $("#sbLed").className = "led " + (up ? "on" : "off");
       $("#sbTxt").textContent = up ? "v1·v2 READY" : "NOT BUILT";
       if (h.version) $("#build").textContent = "v" + h.version + " · execution-graded rag";
-    } catch (e) {}
+    } catch (e) {
+      // Don't leave the readouts on their placeholder "…" forever: a dead or
+      // unreachable API is a state the operator needs to see, not a silent one.
+      $("#clientTxt").textContent = "UNREACHABLE";
+      $("#clientLed").className = "led off";
+      $("#clientRO").title = "GET /health failed: " + (e && e.message ? e.message : e);
+      $("#sbTxt").textContent = "UNKNOWN";
+      $("#sbLed").className = "led off";
+    }
   }
   async function loadExamples() {
     try {
@@ -351,7 +360,11 @@
         c.addEventListener("click", () => { $("#q").value = x.question; setMode(x.version); $("#askForm").requestSubmit(); });
         box.appendChild(c);
       });
-    } catch (e) {}
+    } catch (e) {
+      // Chips are a convenience, so degrade quietly but visibly — the user can
+      // still type a question, but shouldn't wonder where the examples went.
+      $("#examples").appendChild(el("span", "ex-note", "examples unavailable"));
+    }
   }
   const shortQ = q => { q = q.replace(/^In Pydantic v[12],?\s*/i, ""); return q.length > 42 ? q.slice(0, 41) + "…" : q; };
 

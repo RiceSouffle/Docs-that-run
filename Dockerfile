@@ -17,10 +17,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# App-side deps only (the core is stdlib). Copy the manifest first so this layer
-# caches across source changes.
-COPY requirements.txt ./
-RUN pip install "fastapi>=0.110" "uvicorn[standard]>=0.29" "anthropic>=0.40"
+# App-side deps only (the core is stdlib), and no test tooling in the image.
+# Copy the manifest first so this layer caches across source changes — and
+# install *from* it, so editing the manifest is what actually changes the image.
+COPY requirements-runtime.txt ./
+RUN pip install -r requirements-runtime.txt
 
 COPY . .
 
