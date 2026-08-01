@@ -52,7 +52,7 @@ from docsthatrun.schema import VERSIONS
 configure_logging(settings.log_level, settings.log_json)
 log = logging.getLogger("docsthatrun.api")
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 
 metrics = Metrics()
 answer_cache = TTLCache(settings.cache_max, settings.cache_ttl_s)

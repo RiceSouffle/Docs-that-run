@@ -540,12 +540,24 @@ the file with `runpy.run_path(..., run_name='__main__')`, reproducing exactly wh
 `python file.py` gives.
 
 **Why the process *group* is killed.** A timeout that kills only the direct child orphans
-any grandchild it spawned — which keeps running and holds the output pipe open, hanging the
-reader. The child is started with `start_new_session=True` so everything it spawns inherits
-its group, and the timeout path sends `SIGKILL` to the whole group. The drain afterwards is
-itself bounded to 5 seconds, because a process that escaped the group could otherwise hold
-the pipe open forever. A regression test spawns a grandchild that would write a marker file
-five seconds later and asserts the file never appears.
+any grandchild it spawned, which keeps running unsupervised. The child is started with
+`start_new_session=True` so everything it spawns inherits its group, and the timeout path
+sends `SIGKILL` to the whole group. The reap afterwards is bounded to 5 seconds, because a
+process that escaped the group (a double-fork daemon) could otherwise hold the parent
+waiting forever. A regression test spawns a grandchild that would write a marker file five
+seconds later and asserts the file never appears.
+
+**Why output goes to files, not pipes.** This one was a real bug, found late. Reading the
+child's output through a pipe means reading it into the *parent's* memory with no ceiling —
+and neither resource limit covers that: `RLIMIT_AS` bounds the child, not the parent's
+buffer, and `RLIMIT_FSIZE` bounds files, not pipes. A snippet doing nothing but
+`sys.stdout.write` in a loop therefore grew the API server without limit. Measured at
+production defaults: 512 MiB of output took the process from 13 MB to 1,809 MB resident, and
+the snippet still reported PASS. Redirecting stdout and stderr to temp files puts the same
+write back under `RLIMIT_FSIZE` at the kernel, and the parent reads back only a bounded tail
+(64 KB). The same measurement after the fix: 13.0 MB to 13.1 MB, and the flood correctly
+fails. It also deleted the pipe-drain logic entirely — with no pipe, there is nothing to
+deadlock on.
 
 `sandbox_available(version)` probes whether Pydantic actually imports, because checking
 that `bin/python` exists is not enough — the setup script creates the venv *before* pip
@@ -586,10 +598,10 @@ up outermost, because a hand-built 500 from inside `observe` would otherwise car
 `Access-Control-Allow-Origin` header and a browser would see an opaque network error
 instead of a readable failure.
 
-Supporting modules are stdlib-only by design: `cache.py` (LRU + TTL), `ratelimit.py`
-(token bucket with an LRU cap on tracked keys so the table cannot grow without bound),
-`observability.py` (JSON log formatter, metrics, Prometheus rendering with a 64-label
-cardinality cap), and `config.py`.
+Supporting modules are stdlib-only by design: `docsthatrun/cache.py` (LRU + TTL),
+`docsthatrun/ratelimit.py` (token bucket with an LRU cap on tracked keys so the table cannot
+grow without bound), `docsthatrun/observability.py` (JSON log formatter, metrics, Prometheus
+rendering with a 64-label cardinality cap), and `docsthatrun/config.py`.
 
 Every tunable is an environment variable:
 
@@ -771,9 +783,7 @@ snippet to assert anything meaningful.
 limits, not a container or a virtual machine. There is no network isolation — nothing stops
 a snippet opening a socket. `RLIMIT_AS` is skipped on macOS because it is unreliable there,
 so the memory cap exists only on Linux. Windows gets no limits and no process-group kill at
-all. And `RLIMIT_FSIZE` does not apply to pipes, so a snippet printing gigabytes to stdout
-is bounded only by CPU and wall-clock time. Genuinely untrusted input at scale would want
-gVisor or a microVM above all of this.
+all. Genuinely untrusted input at scale would want gVisor or a microVM above all of this.
 
 **The second retrieval channel is not semantic.** It shares a tokenizer and idf table with
 BM25, so the "hybrid" is two lexical opinions rather than lexical plus meaning-based. The

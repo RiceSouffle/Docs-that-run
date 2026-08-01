@@ -130,6 +130,18 @@ seam to swap in heavier infra when a second instance actually exists.
   It is still a venv, not a container; running genuinely untrusted input at scale
   would want gVisor/a microVM on top, and the limits are the defence-in-depth
   layer beneath that.
+- **Snippet output is captured to files, not pipes.** Reading a child through a
+  pipe means reading it into the *parent's* memory with no ceiling, and neither
+  limit covers that gap: `RLIMIT_AS` bounds the child, `RLIMIT_FSIZE` bounds
+  files. So output volume was the one unbounded axis — measured, 512 MiB of
+  snippet stdout took the API process from 13 MB to 1.8 GB resident while the
+  snippet still scored PASS. Redirecting to temp files puts the write back under
+  `RLIMIT_FSIZE` at the kernel and the parent reads a bounded 64 KB tail; the
+  same test now moves it 13.0 → 13.1 MB. Two consequences worth stating: a
+  snippet printing more than `sandbox_file_mb` (10 MB default) is now killed
+  rather than tolerated, which for a documentation snippet is containment rather
+  than a real constraint; and with no pipe there is nothing to deadlock on, so
+  the old bounded post-kill drain is gone.
 - **Config is one env-driven dataclass** (`config.py`), not scattered
   `os.environ` reads, so behaviour is 12-factor and every knob is discoverable.
 - **Observability is stdlib.** JSON logs with a request id (`observability.py`),

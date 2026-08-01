@@ -109,6 +109,31 @@ def test_flood_of_stdout_does_not_balloon_this_process():
 
 
 @needs_sandbox
+def test_no_temp_file_leak_on_any_exit_path():
+    """Capturing output to files means three temp files per grade. Every exit
+    path — success, failure, timeout, CPU kill, empty code — must unlink all of
+    them, or a long-running server slowly fills its temp directory."""
+    import glob
+    import tempfile
+
+    td = tempfile.gettempdir()
+
+    def temp_count():
+        return sum(
+            len(glob.glob(os.path.join(td, pat)))
+            for pat in ("tmp*.out", "tmp*.err", "tmp*.py")
+        )
+
+    before = temp_count()
+    grade("assert 1 == 1\n", "v2")                       # pass
+    grade("raise ValueError('x')\n", "v2")               # non-zero exit
+    grade("import time\ntime.sleep(30)\n", "v2", timeout=2)          # wall timeout
+    grade("while True: pass\n", "v2", timeout=30, cpu_seconds=1)     # CPU kill
+    grade("   \n", "v2")                                 # empty snippet
+    assert temp_count() == before
+
+
+@needs_sandbox
 def test_v2_probe_requires_pydantic_settings():
     """The v2 golden set uses pydantic_settings, so a v2 venv without it is not
     usable — reporting it available charges the ModuleNotFoundError to answer
