@@ -37,7 +37,16 @@ def load_corpus(path: str = DEFAULT_CORPUS_PATH) -> List[Chunk]:
             raw = raw.strip()
             if not raw:
                 continue
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                # A JSON typo is the likeliest corpus authoring error. Raised
+                # bare, it reports "line 1" — json only sees this one stripped
+                # line, not the file — which sends you looking in the wrong
+                # place. Name the file and the real line number instead.
+                raise ValueError(
+                    f"{path}:{line_no} invalid JSON: {exc.msg} (at column {exc.colno})"
+                ) from exc
             try:
                 chunks.append(
                     Chunk(

@@ -7,6 +7,7 @@ crisply version-locked (pass on target, fail on the other version)."""
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -109,6 +110,38 @@ def test_flood_of_stdout_does_not_balloon_this_process():
 
 
 @needs_sandbox
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+def test_background_process_does_not_outlive_a_passing_grade():
+    """The snippet's process group must be swept on EVERY path, not just the
+    timeout. A snippet that spawns a background process and exits 0 finishes in
+    milliseconds, so the wall-clock timeout never fires — previously nothing
+    ever reaped the descendant and it outlived the request."""
+    import subprocess as sp
+
+    marker = "docsthatrun_orphan_probe"
+    snippet = (
+        "import subprocess, sys\n"
+        f"subprocess.Popen([sys.executable, '-c', \"import time; time.sleep(120)  # {marker}\"])\n"
+        "assert 1 + 1 == 2\n"
+    )
+
+    def survivors():
+        out = sp.run(["pgrep", "-f", marker], capture_output=True, text=True).stdout
+        return [p for p in out.split() if p]
+
+    res = grade(snippet, "v2")
+    assert res.passed  # the snippet itself is fine; that's the point
+    time.sleep(0.5)
+    alive = survivors()
+    for pid in alive:  # never leave strays behind, even if we're about to fail
+        try:
+            os.kill(int(pid), 9)
+        except OSError:
+            pass
+    assert not alive, f"{len(alive)} sandbox descendant(s) outlived a passing grade"
+
+
+@needs_sandbox
 def test_no_temp_file_leak_on_any_exit_path():
     """Capturing output to files means three temp files per grade. Every exit
     path — success, failure, timeout, CPU kill, empty code — must unlink all of
@@ -144,6 +177,20 @@ def test_v2_probe_requires_pydantic_settings():
     assert "pydantic_settings" not in _PROBE_IMPORTS["v1"]  # v1 has no such split
 
 
+def test_signal_deaths_get_an_explanatory_reason():
+    """A signal kill leaves no stderr, so `reason` is the only explanation the
+    caller ever gets — "non-zero exit" told them nothing."""
+    import signal as sig
+
+    from docsthatrun.sandbox import _exit_reason
+
+    assert _exit_reason(0, True) == "ok"
+    assert _exit_reason(1, False) == "non-zero exit"
+    assert "CPU" in _exit_reason(-sig.SIGXCPU, False)
+    assert "file-size" in _exit_reason(-sig.SIGXFSZ, False)
+    assert _exit_reason(None, False) == "non-zero exit"
+
+
 def test_sandbox_available_does_not_cache_failure(tmp_path, monkeypatch):
     """A probe that races `make sandbox` (venv exists, pydantic mid-install)
     must not disable grading for the process lifetime: failure is re-probed,
@@ -151,17 +198,43 @@ def test_sandbox_available_does_not_cache_failure(tmp_path, monkeypatch):
     import docsthatrun.sandbox as sb
 
     monkeypatch.setattr(sb, "_IMPORT_OK", {})
+    monkeypatch.setattr(sb, "_IMPORT_FAIL_AT", {})
     failing = tmp_path / "python_failing"
     failing.write_text("#!/bin/sh\nexit 1\n")
     failing.chmod(0o755)
     monkeypatch.setitem(sb.VENV_PYTHON, "v2", str(failing))
     assert sb.sandbox_available("v2") is False
-    assert "v2" not in sb._IMPORT_OK  # the failure was NOT cached
+    assert "v2" not in sb._IMPORT_OK  # the failure was NOT cached as a verdict
 
-    # ...the install finishes (import now succeeds): availability self-heals.
+    # ...the install finishes (import now succeeds): availability self-heals
+    # once the re-probe cooldown has elapsed.
     working = tmp_path / "python_working"
     working.write_text("#!/bin/sh\nexit 0\n")
     working.chmod(0o755)
     monkeypatch.setitem(sb.VENV_PYTHON, "v2", str(working))
+    sb._IMPORT_FAIL_AT.clear()  # simulate the cooldown expiring
     assert sb.sandbox_available("v2") is True
     assert sb._IMPORT_OK.get("v2") is True  # success IS cached
+
+
+def test_failed_probe_is_not_reforked_on_every_call(tmp_path, monkeypatch):
+    """/health and /ready probe both versions per request. With a half-built
+    venv that used to mean a process spawn per version per request — a fork
+    storm under a monitoring poll. Failures are rate-limited, not re-probed."""
+    import docsthatrun.sandbox as sb
+
+    monkeypatch.setattr(sb, "_IMPORT_OK", {})
+    monkeypatch.setattr(sb, "_IMPORT_FAIL_AT", {})
+    failing = tmp_path / "python_failing"
+    failing.write_text("#!/bin/sh\nexit 1\n")
+    failing.chmod(0o755)
+    monkeypatch.setitem(sb.VENV_PYTHON, "v2", str(failing))
+
+    spawns = []
+    real_run = sb.subprocess.run
+    monkeypatch.setattr(
+        sb.subprocess, "run", lambda *a, **k: (spawns.append(1), real_run(*a, **k))[1]
+    )
+    for _ in range(20):
+        assert sb.sandbox_available("v2") is False
+    assert len(spawns) == 1, f"probed {len(spawns)} times; expected 1 within the cooldown"

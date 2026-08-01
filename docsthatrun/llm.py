@@ -249,7 +249,11 @@ CLIENT_NAMES = ("auto", "mock", "anthropic")
 
 
 def get_client(name: Optional[str] = None) -> LLMClient:
-    name = name or os.environ.get("DOCSTHATRUN_LLM", "auto")
+    # `.strip() or "auto"` matters: DOCSTHATRUN_LLM= (set but empty) is how a
+    # .env, docker-compose default, or CI matrix writes "leave it alone", and
+    # os.environ.get returns "" for it, not the default. Rejecting that as an
+    # unknown client would refuse to start the very setup docker-compose ships.
+    name = (name or os.environ.get("DOCSTHATRUN_LLM", "auto")).strip() or "auto"
     if name not in CLIENT_NAMES:
         # Never silently fall through to "auto" on a typo. `--client mokc` used
         # to select auto, which with a key exported makes real, billed API calls

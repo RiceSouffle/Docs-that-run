@@ -117,10 +117,17 @@ _CSP = (
 # rather than globally: the demo UI and every API response keep the strict
 # policy, and the app itself still makes zero external requests.
 _CDN = "https://cdn.jsdelivr.net"
+# ReDoc additionally pulls a stylesheet from fonts.googleapis.com and its font
+# files from fonts.gstatic.com; without both, /redoc renders with broken
+# typography and console errors.
+_FONTS_CSS = "https://fonts.googleapis.com"
+_FONTS_FILES = "https://fonts.gstatic.com"
 _CSP_DOCS = (
-    f"default-src 'self'; style-src 'self' 'unsafe-inline' {_CDN}; "
-    f"script-src 'self' 'unsafe-inline' {_CDN}; font-src 'self' {_CDN}; "
+    f"default-src 'self'; style-src 'self' 'unsafe-inline' {_CDN} {_FONTS_CSS}; "
+    f"script-src 'self' 'unsafe-inline' {_CDN}; "
+    f"font-src 'self' {_CDN} {_FONTS_FILES}; "
     "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "worker-src 'self' blob:; "  # ReDoc renders in a web worker
     "connect-src 'self'; base-uri 'none'; frame-ancestors 'self'"
 )
 _DOCS_PATHS = frozenset({"/docs", "/redoc", "/docs/oauth2-redirect"})

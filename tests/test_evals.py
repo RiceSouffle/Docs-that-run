@@ -144,6 +144,19 @@ def test_mock_fixture_collision_fails_loud(monkeypatch):
         llm._load_fixtures_from_golden()
 
 
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_empty_llm_env_var_means_auto_not_error(monkeypatch, raw):
+    # `DOCSTHATRUN_LLM=` is how a .env / docker-compose default / CI matrix
+    # writes "leave it alone"; os.environ.get returns "" for it, not the
+    # default. Rejecting that as an unknown client refused to start the very
+    # setup docker-compose.yml ships.
+    from docsthatrun.llm import MockClient, get_client
+
+    monkeypatch.setenv("DOCSTHATRUN_LLM", raw)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert isinstance(get_client(), MockClient)
+
+
 def test_unknown_client_name_raises_instead_of_falling_through():
     # `--client mokc` used to silently select "auto", which with a key exported
     # makes real billed API calls when the operator asked for the offline mock

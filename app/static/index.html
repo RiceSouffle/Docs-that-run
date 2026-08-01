@@ -225,7 +225,8 @@
   @keyframes sp { to { transform: rotate(360deg); } }
   .cursor { display: inline-block; width: 8px; height: 15px; background: var(--amber); margin-left: 2px; animation: bl 1.1s steps(1) infinite; vertical-align: text-bottom; }
   @keyframes bl { 50% { opacity: 0; } }
-  .err-box { font-family: var(--mono); font-size: 13px; color: var(--fail); border: 1px solid var(--fail-line); background: var(--fail-bg); padding: 12px 14px; }
+  /* overflow-wrap: an error echoing a long unbroken token must wrap, not push the page sideways */
+  .err-box { font-family: var(--mono); font-size: 13px; color: var(--fail); border: 1px solid var(--fail-line); background: var(--fail-bg); padding: 12px 14px; overflow-wrap: anywhere; }
 
   footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; color: var(--faint); letter-spacing: .03em; }
   footer a { color: var(--dim); }
@@ -380,13 +381,26 @@
   function verdictInstrument(data) {
     const ex = data.execution, a = data.answer;
     let kind, mark, word, rows = [];
-    if (a.abstained) { kind = "na"; mark = "⦸"; word = "ABSTAIN"; rows.push(["reason", "docs do not cover this query"]); }
+    if (a.abstained) {
+      kind = "na"; mark = "⦸"; word = "ABSTAIN";
+      // Don't assert a reason the server didn't give. The model also abstains on
+      // a refusal or a truncated generation, and claiming "docs do not cover
+      // this" there is simply false — the answer text says what happened.
+      rows.push(["reason", a.answer ? "see note below" : "docs do not cover this query"]);
+    }
     else if (!ex) { kind = "na"; mark = "○"; word = "NO GRADE"; rows.push(["reason", "not graded"]); }
     else if (!ex.available) { kind = "na"; mark = "○"; word = "NO GRADE"; rows.push(["reason", ex.reason || "sandbox unavailable"]); }
     else {
       kind = ex.passed ? "pass" : "fail"; mark = ex.passed ? "✓" : "✕"; word = ex.passed ? "PASS" : "FAIL";
       rows.push(["target", "pydantic " + data.version + " sandbox"]);
-      rows.push(["exit", String(ex.returncode)]);
+      // returncode is null for the empty-snippet case, and negative for a
+      // signal kill (-9 SIGKILL on timeout, -24 SIGXCPU on the CPU limit).
+      if (ex.returncode == null) rows.push(["exit", "—"]);
+      else if (ex.returncode < 0) rows.push(["exit", ex.returncode + " (killed by signal " + (-ex.returncode) + ")"]);
+      else rows.push(["exit", String(ex.returncode)]);
+      // A timeout or CPU kill produces NO stderr, so without this the panel
+      // shows a bare FAIL with nothing explaining why.
+      if (!ex.passed && ex.reason && ex.reason !== "non-zero exit") rows.push(["reason", ex.reason]);
     }
     if (data.meta && data.meta.latency_ms != null) rows.push(["time", data.meta.latency_ms + " ms" + (data.meta.cached ? "  ·  cached" : "")]);
     const wrap = el("div", "verdict " + kind);
@@ -403,7 +417,15 @@
     const head = el("div", "code-head");
     head.appendChild(el("span", "label", "generated snippet"));
     const copy = el("button", "copy", "copy"); copy.type = "button";
-    copy.addEventListener("click", () => { navigator.clipboard && navigator.clipboard.writeText(code); copy.textContent = "copied"; setTimeout(() => copy.textContent = "copy", 1200); });
+    // Only claim success if the write actually succeeded. navigator.clipboard is
+    // undefined on any non-secure origin (plain http, which is how this demo is
+    // usually served), and writeText() can reject — reporting "copied" then left
+    // the user pasting whatever was there before.
+    copy.addEventListener("click", () => {
+      const done = ok => { copy.textContent = ok ? "copied" : "copy failed"; setTimeout(() => copy.textContent = "copy", 1200); };
+      if (!navigator.clipboard || !navigator.clipboard.writeText) { done(false); return; }
+      navigator.clipboard.writeText(code).then(() => done(true), () => done(false));
+    });
     head.appendChild(copy);
     const pre = el("pre", "code"); pre.innerHTML = highlight(code.replace(/\s+$/, ""));
     frag.appendChild(head); frag.appendChild(pre);
@@ -508,7 +530,20 @@
   }
   async function errorMessage(r) {
     let body = ""; try { body = await r.text(); } catch (e) {}
-    try { const j = JSON.parse(body); if (typeof j.detail === "string") return j.detail; if (j.detail) return JSON.stringify(j.detail); } catch (e) {}
+    try {
+      const j = JSON.parse(body);
+      if (typeof j.detail === "string") return j.detail;
+      // FastAPI's 422 detail is a list of objects, each echoing the offending
+      // `input` — dumping it raw reprinted the user's whole question back at
+      // them. Summarise to field + message instead.
+      if (Array.isArray(j.detail)) {
+        return j.detail.map(d => {
+          const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "request";
+          return field + ": " + (d.msg || "invalid");
+        }).join("; ") || ("HTTP " + r.status);
+      }
+      if (j.detail) return JSON.stringify(j.detail);
+    } catch (e) {}
     return "HTTP " + r.status;
   }
 

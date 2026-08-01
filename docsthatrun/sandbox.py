@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -98,6 +99,15 @@ class ExecResult:
 
 _IMPORT_OK: Dict[str, bool] = {}
 
+# A failed probe is deliberately not cached as a verdict (the venv may still be
+# installing), but it must not be re-forked on every request either: /health and
+# /ready probe both versions per call, so a half-built venv turned a health
+# check into two process spawns each time — under a monitoring poll that is a
+# steady fork storm. Remember only *when* a probe last failed and skip re-probing
+# for this many seconds. Self-healing is preserved, just rate-limited.
+_IMPORT_FAIL_AT: Dict[str, float] = {}
+_PROBE_RETRY_S = 10.0
+
 
 def _kill_process_tree(proc: "subprocess.Popen", posix: bool) -> None:
     """SIGKILL the whole process group so grandchildren die with the child."""
@@ -111,6 +121,47 @@ def _kill_process_tree(proc: "subprocess.Popen", posix: bool) -> None:
             proc.kill()
         except OSError:
             pass
+
+
+_SIGNAL_REASONS = {
+    signal.SIGXCPU: "killed: exceeded the CPU-time limit",
+    signal.SIGXFSZ: "killed: exceeded the file-size limit",
+    signal.SIGKILL: "killed (SIGKILL)",
+    signal.SIGSEGV: "crashed (segmentation fault)",
+}
+
+
+def _exit_reason(returncode: Optional[int], passed: bool) -> str:
+    """Explain a non-zero exit. A signal kill leaves NO stderr, so "non-zero
+    exit" was the only thing the caller ever saw for a snippet stopped by the
+    CPU or file-size limit — naming the signal makes those self-explanatory."""
+    if passed:
+        return "ok"
+    if returncode is not None and returncode < 0:
+        sig = -returncode
+        try:
+            name = signal.Signals(sig).name
+        except ValueError:  # pragma: no cover - unknown signal number
+            name = f"signal {sig}"
+        return _SIGNAL_REASONS.get(sig, f"killed by {name}")
+    return "non-zero exit"
+
+
+def _kill_group(pgid: Optional[int]) -> None:
+    """SIGKILL a process group by the id captured when it was spawned.
+
+    Deliberately *not* ``os.getpgid(proc.pid)``: after the direct child exits
+    that lookup raises ESRCH on macOS, and after it is reaped it raises
+    everywhere — so a late lookup silently kills nothing. The group stays
+    addressable by the leader's pid while any member is alive.
+    """
+    if pgid is None:  # pragma: no cover - non-POSIX
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        # ESRCH is the normal case: the snippet behaved and the group is empty.
+        pass
 
 
 # Only ever surface a bounded tail of a snippet's output. `stderr_tail` is 400
@@ -149,6 +200,9 @@ def sandbox_available(version: str) -> bool:
         return False
     if version in _IMPORT_OK:
         return True
+    last_fail = _IMPORT_FAIL_AT.get(version)
+    if last_fail is not None and (time.monotonic() - last_fail) < _PROBE_RETRY_S:
+        return False  # probed recently and it failed; don't re-fork yet
     try:
         proc = subprocess.run(
             [python, "-c", _PROBE_IMPORTS[version]],
@@ -160,14 +214,17 @@ def sandbox_available(version: str) -> bool:
         # Transient (fork EAGAIN under load, or the probe timing out while the
         # venv is still being populated). Don't cache — a later call retries,
         # so a momentary hiccup can't permanently disable grading.
+        _IMPORT_FAIL_AT[version] = time.monotonic()
         return False
     if proc.returncode != 0:
         # Import failed — usually a venv whose `pip install` is still running
-        # (or was interrupted). Equally transient, equally uncached: a probe
-        # racing `make sandbox` must not disable grading for the process
-        # lifetime. Only success is definitive.
+        # (or was interrupted). Equally transient, equally uncached as a
+        # verdict: a probe racing `make sandbox` must not disable grading for
+        # the process lifetime. Only success is definitive.
+        _IMPORT_FAIL_AT[version] = time.monotonic()
         return False
     _IMPORT_OK[version] = True
+    _IMPORT_FAIL_AT.pop(version, None)
     return True
 
 
@@ -214,12 +271,19 @@ def grade(
     if not code.strip():
         return ExecResult(False, True, reason="empty code snippet")
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, encoding="utf-8"
-    )
-    out_f = tempfile.NamedTemporaryFile(suffix=".out", delete=False)
-    err_f = tempfile.NamedTemporaryFile(suffix=".err", delete=False)
+    # Track handles as they are created so the cleanup below covers a partial
+    # failure too: if the temp dir fills after the first file is made, the
+    # already-created ones must still be closed and unlinked.
+    handles: List["tempfile._TemporaryFileWrapper"] = []
     try:
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        )
+        handles.append(tmp)
+        out_f = tempfile.NamedTemporaryFile(suffix=".out", delete=False)
+        handles.append(out_f)
+        err_f = tempfile.NamedTemporaryFile(suffix=".err", delete=False)
+        handles.append(err_f)
         tmp.write(code)
         tmp.flush()
         tmp.close()
@@ -246,43 +310,57 @@ def grade(
         else:  # pragma: no cover - non-POSIX has no rlimits; run directly
             cmd = [python, tmp.name]
         proc = subprocess.Popen(cmd, **popen_kwargs)
+        # start_new_session makes the child its own session/group leader, so the
+        # group id *is* its pid. Capture it now: once the child exits, and
+        # certainly once it is reaped, os.getpgid(proc.pid) raises ESRCH — so
+        # deriving the group later would silently degrade to a no-op.
+        pgid = proc.pid if posix else None
         try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_process_tree(proc, posix)
-            # Reap after the kill, bounded: a snippet that setsid-escapes the
-            # group (double-fork daemon) could otherwise hold us forever. There
-            # is no pipe to drain — output is already on disk.
             try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:  # pragma: no cover
-                pass
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_group(pgid) if posix else _kill_process_tree(proc, posix)
+                # Reap after the kill, bounded: a snippet that setsid-escapes the
+                # group (double-fork daemon) could otherwise hold us forever.
+                # There is no pipe to drain — output is already on disk.
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:  # pragma: no cover
+                    pass
+                return ExecResult(
+                    False,
+                    True,
+                    returncode=proc.returncode,
+                    stdout=_read_tail(out_f.name),
+                    stderr=_read_tail(err_f.name),
+                    reason=f"timed out after {timeout}s",
+                )
+            passed = proc.returncode == 0
             return ExecResult(
-                False,
-                True,
+                passed=passed,
+                available=True,
                 returncode=proc.returncode,
                 stdout=_read_tail(out_f.name),
                 stderr=_read_tail(err_f.name),
-                reason=f"timed out after {timeout}s",
+                reason=_exit_reason(proc.returncode, passed),
             )
-        passed = proc.returncode == 0
-        return ExecResult(
-            passed=passed,
-            available=True,
-            returncode=proc.returncode,
-            stdout=_read_tail(out_f.name),
-            stderr=_read_tail(err_f.name),
-            reason="ok" if passed else "non-zero exit",
-        )
+        finally:
+            # Sweep the group on EVERY path, not just the timeout. A snippet can
+            # spawn a background process and then exit 0 in milliseconds; the
+            # direct child is gone, so the wall-clock timeout never fires and
+            # nothing would ever reap the descendant. It would outlive the
+            # request, holding the (already unlinked) capture files open so their
+            # disk is never reclaimed.
+            if posix:
+                _kill_group(pgid)
     finally:
-        for handle in (out_f, err_f):
+        for handle in handles:
             try:
                 handle.close()
             except OSError:  # pragma: no cover
                 pass
-        for path in (tmp.name, out_f.name, err_f.name):
             try:
-                os.unlink(path)
+                os.unlink(handle.name)
             except OSError:  # pragma: no cover
                 pass
 

@@ -39,6 +39,14 @@ def test_top_k_default_is_clamped_into_range(monkeypatch, raw, expected):
     assert Settings.from_env().top_k_default == expected
 
 
+@pytest.mark.parametrize("raw", ["0", "-5"])
+def test_max_question_chars_is_clamped(monkeypatch, raw):
+    # This feeds Field(min_length=1, max_length=settings.max_question_chars).
+    # At 0 or negative, max_length < min_length and EVERY question is rejected.
+    monkeypatch.setenv("DOCSTHATRUN_MAX_QUESTION_CHARS", raw)
+    assert Settings.from_env().max_question_chars >= 1
+
+
 def test_top_k_max_cannot_invert_the_range(monkeypatch):
     monkeypatch.setenv("DOCSTHATRUN_TOP_K_MAX", "0")
     s = Settings.from_env()

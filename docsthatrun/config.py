@@ -94,6 +94,12 @@ class Settings:
         # top-ranked chunks off. Clamping at the source fixes every consumer.
         top_k_max = _clamp(_int("DOCSTHATRUN_TOP_K_MAX", cls.top_k_max), 1, 1000)
         top_k_default = _clamp(_int("DOCSTHATRUN_TOP_K", cls.top_k_default), 1, top_k_max)
+        # Same reasoning, same hole: this feeds Field(min_length=1,
+        # max_length=...) on the request model. A value of 0 or negative makes
+        # max_length < min_length, so *every* question is rejected as too long.
+        max_question_chars = _clamp(
+            _int("DOCSTHATRUN_MAX_QUESTION_CHARS", cls.max_question_chars), 1, 1_000_000
+        )
         return cls(
             model=os.environ.get("DOCSTHATRUN_MODEL", cls.model),
             effort=os.environ.get("DOCSTHATRUN_EFFORT", cls.effort),
@@ -102,7 +108,7 @@ class Settings:
             default_version=os.environ.get("DOCSTHATRUN_DEFAULT_VERSION", cls.default_version),
             top_k_default=top_k_default,
             top_k_max=top_k_max,
-            max_question_chars=_int("DOCSTHATRUN_MAX_QUESTION_CHARS", cls.max_question_chars),
+            max_question_chars=max_question_chars,
             sandbox_timeout_s=_int("DOCSTHATRUN_SANDBOX_TIMEOUT", cls.sandbox_timeout_s),
             sandbox_cpu_seconds=_int("DOCSTHATRUN_SANDBOX_CPU", cls.sandbox_cpu_seconds),
             sandbox_memory_mb=_int("DOCSTHATRUN_SANDBOX_MEM_MB", cls.sandbox_memory_mb),
