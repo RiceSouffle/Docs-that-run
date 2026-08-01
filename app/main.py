@@ -311,20 +311,57 @@ def index() -> str:
         raise HTTPException(status_code=500, detail="UI asset not found") from None
 
 
+_SANDBOX_STATUS_TTL_S = 30.0
+_sandbox_status: tuple = (0.0, None)
+_sandbox_status_lock = threading.Lock()
+
+
+def _sandbox_status_cached() -> Dict[str, bool]:
+    """Sandbox status for the *unauthenticated, un-rate-limited* probes.
+
+    ``sandbox_available`` caches success only, on purpose (a probe racing
+    `make sandbox` must not disable grading for the process lifetime). But that
+    means a venv whose install never finished re-forks a probe subprocess on
+    every call, and /health and /ready are public and unmetered — a plain GET
+    flood becomes one process fork per request, and since these are sync routes
+    each blocked probe holds an anyio threadpool worker. Memoize for 30 s under
+    a lock: at most one probe per version per TTL no matter the request rate,
+    and grading still self-heals within a TTL of the install finishing.
+    """
+    global _sandbox_status
+    ts, val = _sandbox_status
+    if val is not None and time.monotonic() - ts < _SANDBOX_STATUS_TTL_S:
+        return val
+    # Non-blocking: if another request is already probing, serve the last known
+    # value instead of queueing behind it. Waiting would still park a threadpool
+    # worker for the probe's 15 s timeout, which is the thing being avoided.
+    if not _sandbox_status_lock.acquire(blocking=False):
+        return val if val is not None else {v: False for v in VERSIONS}
+    try:
+        ts, val = _sandbox_status
+        if val is not None and time.monotonic() - ts < _SANDBOX_STATUS_TTL_S:
+            return val
+        fresh = {v: sandbox_available(v) for v in VERSIONS}
+        _sandbox_status = (time.monotonic(), fresh)
+        return fresh
+    finally:
+        _sandbox_status_lock.release()
+
+
 @app.get("/health")
 def health() -> dict:
     return {
         "status": "ok",
         "version": APP_VERSION,
         "client": type(get_llm()).__name__,
-        "sandbox": {v: sandbox_available(v) for v in VERSIONS},
+        "sandbox": _sandbox_status_cached(),
     }
 
 
 @app.get("/ready")
 def ready(response: Response) -> dict:
     corpus_ok = len(get_retriever().chunks) > 0
-    sandbox = {v: sandbox_available(v) for v in VERSIONS}
+    sandbox = _sandbox_status_cached()
     if not corpus_ok:
         # Probes (k8s readinessProbe, LB health checks) act on the status code,
         # not the body — "ready": false inside a 200 would still get traffic.
