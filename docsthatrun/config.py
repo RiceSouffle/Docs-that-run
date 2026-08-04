@@ -60,24 +60,24 @@ class Settings:
     max_question_chars: int = 2000
 
     # ---- sandbox execution limits -------------------------------------------
-    sandbox_timeout_s: int = 20        # wall-clock
-    sandbox_cpu_seconds: int = 10      # RLIMIT_CPU
-    sandbox_memory_mb: int = 1024      # RLIMIT_AS (address space); generous so
-                                       # a legit pydantic import never false-fails
-    sandbox_file_mb: int = 10          # RLIMIT_FSIZE (max file write)
+    sandbox_timeout_s: int = 20  # wall-clock
+    sandbox_cpu_seconds: int = 10  # RLIMIT_CPU
+    sandbox_memory_mb: int = 1024  # RLIMIT_AS (address space); generous so
+    # a legit pydantic import never false-fails
+    sandbox_file_mb: int = 10  # RLIMIT_FSIZE (max file write)
 
     # ---- answer cache -------------------------------------------------------
     cache_max: int = 256
     cache_ttl_s: float = 900.0
 
     # ---- rate limiting (per client IP, token bucket) ------------------------
-    rate_limit_rpm: int = 60           # sustained requests/min; 0 disables
-    rate_limit_burst: int = 20         # bucket capacity
-    trust_proxy: bool = False          # key limits on X-Forwarded-For's first hop.
-                                       # Opt-in: only enable behind a proxy that
-                                       # overwrites the header, else it's spoofable
-                                       # (and off-proxy, all clients would share
-                                       # the proxy IP's single bucket).
+    rate_limit_rpm: int = 60  # sustained requests/min; 0 disables
+    rate_limit_burst: int = 20  # bucket capacity
+    trust_proxy: bool = False  # key limits on X-Forwarded-For's first hop.
+    # Opt-in: only enable behind a proxy that
+    # overwrites the header, else it's spoofable
+    # (and off-proxy, all clients would share
+    # the proxy IP's single bucket).
 
     # ---- server -------------------------------------------------------------
     cors_origins: Tuple[str, ...] = ()
@@ -97,9 +97,7 @@ class Settings:
         # Same reasoning, same hole: this feeds Field(min_length=1,
         # max_length=...) on the request model. A value of 0 or negative makes
         # max_length < min_length, so *every* question is rejected as too long.
-        max_question_chars = _clamp(
-            _int("DOCSTHATRUN_MAX_QUESTION_CHARS", cls.max_question_chars), 1, 1_000_000
-        )
+        max_question_chars = _clamp(_int("DOCSTHATRUN_MAX_QUESTION_CHARS", cls.max_question_chars), 1, 1_000_000)
         return cls(
             model=os.environ.get("DOCSTHATRUN_MODEL", cls.model),
             effort=os.environ.get("DOCSTHATRUN_EFFORT", cls.effort),

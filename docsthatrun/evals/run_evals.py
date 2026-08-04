@@ -196,11 +196,7 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
     for item in golden:
         t0 = time.perf_counter()
         res = build_answer(item.question, item.version, retriever, client=client, top_k=top_k)
-        if (
-            not res.answer.abstained
-            and (res.answer.code or "").strip()
-            and sandbox_by_version.get(item.version, False)
-        ):
+        if not res.answer.abstained and (res.answer.code or "").strip() and sandbox_by_version.get(item.version, False):
             res.execution_grade()
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         latencies.append(latency_ms)
@@ -239,17 +235,11 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
         # runnable snippet counts as a failure here — with the old
         # graded-only denominator, a client emitting empty code for 40% of
         # items still scored executable_pct=1.0 and passed the gate.
-        "executable_pct": (
-            round(executable_hits / should_run, 3) if (sandbox_up and should_run) else None
-        ),
+        "executable_pct": (round(executable_hits / should_run, 3) if (sandbox_up and should_run) else None),
         "answered_count": should_run,
         "gradable_count": gradable,
-        "answerable_over_abstention": round(
-            answerable_over_abstain / len(golden), 3
-        ) if golden else 0.0,
-        "unanswerable_abstention": round(
-            abstained_correct / len(unanswerable), 3
-        ) if unanswerable else 0.0,
+        "answerable_over_abstention": round(answerable_over_abstain / len(golden), 3) if golden else 0.0,
+        "unanswerable_abstention": round(abstained_correct / len(unanswerable), 3) if unanswerable else 0.0,
         # Failure taxonomy: which stage each answerable item landed in.
         "taxonomy": dict(taxonomy),
         "latency_ms": _latency_stats(latencies),
@@ -269,9 +259,7 @@ def check_gate(report: dict) -> List[str]:
     failures: List[str] = []
     ret = report["retrieval"]
     if ret["recall_at_5"] < GATE["recall_at_5"]:
-        failures.append(
-            f"recall@5 {ret['recall_at_5']} < {GATE['recall_at_5']}"
-        )
+        failures.append(f"recall@5 {ret['recall_at_5']} < {GATE['recall_at_5']}")
     if ret["mrr"] < GATE["mrr"]:
         failures.append(f"mrr {ret['mrr']} < {GATE['mrr']}")
 
@@ -279,8 +267,7 @@ def check_gate(report: dict) -> List[str]:
     if answers:
         if answers["unanswerable_abstention"] < GATE["unanswerable_abstention"]:
             failures.append(
-                "unanswerable_abstention "
-                f"{answers['unanswerable_abstention']} < {GATE['unanswerable_abstention']}"
+                f"unanswerable_abstention {answers['unanswerable_abstention']} < {GATE['unanswerable_abstention']}"
             )
         if answers["answerable_over_abstention"] > GATE["answerable_over_abstention_max"]:
             failures.append(
@@ -295,13 +282,9 @@ def check_gate(report: dict) -> List[str]:
                 # skipped the gate here. (Partial abstention is caught by the
                 # over-abstention gate; empty-code answers now drag pct down
                 # directly, so neither needs a separate check.)
-                failures.append(
-                    "nothing to grade (every answerable item abstained) while the sandbox is up"
-                )
+                failures.append("nothing to grade (every answerable item abstained) while the sandbox is up")
             elif pct < GATE["executable_pct_min"]:
-                failures.append(
-                    f"executable_pct {pct} < {GATE['executable_pct_min']}"
-                )
+                failures.append(f"executable_pct {pct} < {GATE['executable_pct_min']}")
     return failures
 
 
@@ -310,13 +293,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--answers", action="store_true", help="run LLM + sandbox layers")
     parser.add_argument("--gate", action="store_true", help="exit non-zero on threshold miss")
     parser.add_argument(
-        "--top-k", type=int, default=5,
+        "--top-k",
+        type=int,
+        default=5,
         help="retrieval depth, 1-50 (default 5). Metrics are computed at this "
-             "depth, so compare runs at the same value.",
+        "depth, so compare runs at the same value.",
     )
-    parser.add_argument(
-        "--client", default=None, choices=CLIENT_NAMES, help="anthropic | mock | auto"
-    )
+    parser.add_argument("--client", default=None, choices=CLIENT_NAMES, help="anthropic | mock | auto")
     parser.add_argument("--json", default=None, help="write full report to this path")
     args = parser.parse_args(argv)
     # Mirror the CLI/API bound: 0 retrieves nothing and a negative value slices
@@ -330,16 +313,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("=" * 60)
     print("DocsThatRun eval report")
     print("=" * 60)
-    print(f"corpus={report['corpus_size']} golden={report['golden_size']} "
-          f"unanswerable={report['unanswerable_size']}")
-    print(f"retrieval: recall@3={ret['recall_at_3']}  recall@5={ret['recall_at_5']}  "
-          f"mrr={ret['mrr']}")
+    print(f"corpus={report['corpus_size']} golden={report['golden_size']} unanswerable={report['unanswerable_size']}")
+    print(f"retrieval: recall@3={ret['recall_at_3']}  recall@5={ret['recall_at_5']}  mrr={ret['mrr']}")
     if report.get("answers"):
         a = report["answers"]
         print(f"client={report['client']}  sandbox={report['sandbox_available']}")
-        print(f"answers: executable%={a['executable_pct']} (n={a['answered_count']} answered)  "
-              f"unanswerable_abstention={a['unanswerable_abstention']}  "
-              f"answerable_over_abstention={a['answerable_over_abstention']}")
+        print(
+            f"answers: executable%={a['executable_pct']} (n={a['answered_count']} answered)  "
+            f"unanswerable_abstention={a['unanswerable_abstention']}  "
+            f"answerable_over_abstention={a['answerable_over_abstention']}"
+        )
         if a.get("taxonomy"):
             tax = "  ".join(f"{k}={v}" for k, v in sorted(a["taxonomy"].items()))
             print(f"taxonomy: {tax}")

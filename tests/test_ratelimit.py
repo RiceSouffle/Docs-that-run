@@ -24,8 +24,8 @@ def test_disabled_allows_everything():
 def test_keys_are_independent():
     rl = RateLimiter(rpm=60, burst=1)
     assert rl.allow("a")[0] is True
-    assert rl.allow("b")[0] is True      # different key, own bucket
-    assert rl.allow("a")[0] is False     # a is now exhausted
+    assert rl.allow("b")[0] is True  # different key, own bucket
+    assert rl.allow("a")[0] is False  # a is now exhausted
 
 
 def test_bucket_map_is_bounded_under_key_flood():

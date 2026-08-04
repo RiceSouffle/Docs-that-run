@@ -264,9 +264,7 @@ def grade(
         return ExecResult(
             False,
             False,
-            reason=(
-                f"sandbox for {version} not set up — run scripts/setup_sandbox.sh"
-            ),
+            reason=(f"sandbox for {version} not set up — run scripts/setup_sandbox.sh"),
         )
     if not code.strip():
         return ExecResult(False, True, reason="empty code snippet")
@@ -276,9 +274,7 @@ def grade(
     # already-created ones must still be closed and unlinked.
     handles: List["tempfile._TemporaryFileWrapper"] = []
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False, encoding="utf-8"
-        )
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8")
         handles.append(tmp)
         out_f = tempfile.NamedTemporaryFile(suffix=".out", delete=False)
         handles.append(out_f)

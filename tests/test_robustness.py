@@ -19,6 +19,7 @@ from docsthatrun.sandbox import grade, sandbox_available
 
 # ---- LLM answer parsing (llm._extract_json) --------------------------------
 
+
 def test_extract_json_parses_clean_object():
     obj = _extract_json('{"answer":"a","code":"c","citations":["x"],"abstained":false}')
     assert obj == {"answer": "a", "code": "c", "citations": ["x"], "abstained": False}
@@ -27,11 +28,11 @@ def test_extract_json_parses_clean_object():
 @pytest.mark.parametrize(
     "text",
     [
-        "",                                   # empty text block (all thinking)
-        "   \n  ",                            # whitespace only
-        '{"answer": "To serialize you c',     # truncated mid-JSON (max_tokens)
-        "not json at all",                    # non-JSON prose
-        '["a", "b"]',                         # valid JSON but not an object
+        "",  # empty text block (all thinking)
+        "   \n  ",  # whitespace only
+        '{"answer": "To serialize you c',  # truncated mid-JSON (max_tokens)
+        "not json at all",  # non-JSON prose
+        '["a", "b"]',  # valid JSON but not an object
     ],
 )
 def test_extract_json_returns_none_instead_of_raising(text):
@@ -40,7 +41,7 @@ def test_extract_json_returns_none_instead_of_raising(text):
 
 
 def test_extract_json_tolerates_fences_and_prose():
-    fenced = "```json\n{\"answer\":\"a\",\"code\":\"\",\"citations\":[],\"abstained\":true}\n```"
+    fenced = '```json\n{"answer":"a","code":"","citations":[],"abstained":true}\n```'
     assert _extract_json(fenced)["abstained"] is True
     prose = 'Here you go:\n{"answer":"a","code":"","citations":[],"abstained":false} — done'
     assert _extract_json(prose)["answer"] == "a"
@@ -53,6 +54,7 @@ def test_extract_json_fallback_is_string_aware():
 
 
 # ---- CI gate (run_evals.check_gate) ----------------------------------------
+
 
 def _base_report(executable_pct, sandbox=True):
     return {

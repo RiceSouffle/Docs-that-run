@@ -20,7 +20,7 @@ def test_metrics_counts_and_prometheus_render():
 
     snap = m.snapshot({"hits": 3})
     assert snap["grades"]["pass"] == 1
-    assert snap["avg_latency_ms"]["/ask"] == 7.0   # (12.5+7.5+1.0)/3 rounded
+    assert snap["avg_latency_ms"]["/ask"] == 7.0  # (12.5+7.5+1.0)/3 rounded
     assert snap["cache"]["hits"] == 3
 
 
@@ -41,11 +41,11 @@ def test_configure_logging_survives_bad_level():
     root = logging.getLogger()
     original = root.level
     try:
-        configure_logging("TRACE")          # not a Python level name
+        configure_logging("TRACE")  # not a Python level name
         assert root.level == logging.INFO
-        configure_logging("")               # empty env value
+        configure_logging("")  # empty env value
         assert root.level == logging.INFO
-        configure_logging(" warning ")      # sloppy .env whitespace + case
+        configure_logging(" warning ")  # sloppy .env whitespace + case
         assert root.level == logging.WARNING
     finally:
         root.setLevel(original)

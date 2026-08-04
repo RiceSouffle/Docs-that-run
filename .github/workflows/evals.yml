@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# Read-only is all either job needs; the artifact upload uses the action's own
+# token scope, not this one.
+permissions:
+  contents: read
+
 # A newer push supersedes any still-running build of the same branch.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,6 +42,9 @@ jobs:
 
       - name: Lint (ruff)
         run: ruff check docsthatrun app tests
+
+      - name: Format check (ruff)
+        run: ruff format --check docsthatrun app tests
 
       - name: Unit tests (retrieval + sandbox version-lock)
         run: pytest -q

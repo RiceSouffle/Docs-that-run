@@ -111,17 +111,11 @@ def _format_chunks(chunks: List[Chunk]) -> str:
 
 
 def build_user_prompt(question: str, version: str, chunks: List[Chunk]) -> str:
-    return (
-        f"TARGET VERSION: {version}\n\n"
-        f"QUESTION: {question}\n\n"
-        f"DOCUMENTATION CHUNKS:\n{_format_chunks(chunks)}"
-    )
+    return f"TARGET VERSION: {version}\n\nQUESTION: {question}\n\nDOCUMENTATION CHUNKS:\n{_format_chunks(chunks)}"
 
 
 class LLMClient:
-    def generate(
-        self, question: str, version: str, retrieved: List[RetrievalResult]
-    ) -> Dict[str, object]:
+    def generate(self, question: str, version: str, retrieved: List[RetrievalResult]) -> Dict[str, object]:
         raise NotImplementedError
 
 
@@ -140,9 +134,7 @@ class AnthropicClient(LLMClient):
         self.model = model
         self.effort = effort
 
-    def generate(
-        self, question: str, version: str, retrieved: List[RetrievalResult]
-    ) -> Dict[str, object]:
+    def generate(self, question: str, version: str, retrieved: List[RetrievalResult]) -> Dict[str, object]:
         chunks = [r.chunk for r in retrieved]
         prompt = build_user_prompt(question, version, chunks)
         resp = self.client.messages.create(
@@ -173,10 +165,7 @@ class AnthropicClient(LLMClient):
             # observability so a spike in truncations is visible in logs.
             return dict(
                 _ABSTAIN,
-                answer=(
-                    "I couldn't produce a grounded answer"
-                    + (f" (model stopped: {stop})." if stop else ".")
-                ),
+                answer=("I couldn't produce a grounded answer" + (f" (model stopped: {stop})." if stop else ".")),
             )
         return parsed
 
@@ -191,9 +180,7 @@ class MockClient(LLMClient):
     def __init__(self, fixtures: Optional[Dict[str, Dict[str, object]]] = None):
         self.fixtures = fixtures or _load_fixtures_from_golden()
 
-    def generate(
-        self, question: str, version: str, retrieved: List[RetrievalResult]
-    ) -> Dict[str, object]:
+    def generate(self, question: str, version: str, retrieved: List[RetrievalResult]) -> Dict[str, object]:
         fixture = self.fixtures.get(_norm(question))
         if fixture is None:
             return {
@@ -229,19 +216,25 @@ def _load_fixtures_from_golden() -> Dict[str, Dict[str, object]]:
         fixtures[key] = fixture
 
     for item in load_golden():
-        _put(item, {
-            "answer": f"See docs {', '.join(item.relevant_chunk_ids)}.",
-            "code": item.check,
-            "citations": list(item.relevant_chunk_ids),
-            "abstained": False,
-        })
+        _put(
+            item,
+            {
+                "answer": f"See docs {', '.join(item.relevant_chunk_ids)}.",
+                "code": item.check,
+                "citations": list(item.relevant_chunk_ids),
+                "abstained": False,
+            },
+        )
     for item in load_unanswerable():
-        _put(item, {
-            "answer": "I don't have documentation that covers this.",
-            "code": "",
-            "citations": [],
-            "abstained": True,
-        })
+        _put(
+            item,
+            {
+                "answer": "I don't have documentation that covers this.",
+                "code": "",
+                "citations": [],
+                "abstained": True,
+            },
+        )
     return fixtures
 
 
@@ -260,9 +253,7 @@ def get_client(name: Optional[str] = None) -> LLMClient:
         # when the operator explicitly asked for the offline mock — and, the
         # other way round, silently grades the answer key when they asked for
         # Claude. Both produce confidently mislabelled numbers.
-        raise ValueError(
-            f"unknown client {name!r} — expected one of {', '.join(CLIENT_NAMES)}"
-        )
+        raise ValueError(f"unknown client {name!r} — expected one of {', '.join(CLIENT_NAMES)}")
     if name == "mock":
         return MockClient()
     if name == "anthropic":

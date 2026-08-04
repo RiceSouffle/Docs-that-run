@@ -34,9 +34,7 @@ try:
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
 except ImportError as exc:  # pragma: no cover
-    raise SystemExit(
-        "The API server needs fastapi + uvicorn: pip install -r requirements.txt"
-    ) from exc
+    raise SystemExit("The API server needs fastapi + uvicorn: pip install -r requirements.txt") from exc
 
 from docsthatrun.answer import AnswerResult, build_answer
 from docsthatrun.cache import TTLCache
@@ -175,8 +173,11 @@ async def observe(request: Request, call_next):
     log.info(
         "request",
         extra={
-            "request_id": rid, "method": request.method, "path": request.url.path,
-            "status": response.status_code, "latency_ms": latency,
+            "request_id": rid,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "latency_ms": latency,
             "client_ip": request.client.host if request.client else None,
         },
     )
@@ -201,6 +202,7 @@ if settings.cors_origins:  # opt-in; same-origin UI needs none
 
 
 # ---- request / response models --------------------------------------------
+
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=settings.max_question_chars)
@@ -265,6 +267,7 @@ class CompareResponse(BaseModel):
 
 # ---- core answer path (cache + grade + metrics) ---------------------------
 
+
 def _grade_outcome(graded: dict) -> str:
     if graded["answer"]["abstained"]:
         return "abstain"
@@ -288,13 +291,8 @@ def _answer(question: str, version: str, execute: bool, top_k: int) -> dict:
         return out
 
     t0 = time.perf_counter()
-    result: AnswerResult = build_answer(
-        question, version, get_retriever(), client=get_llm(), top_k=top_k
-    )
-    if (
-        execute and result.answer.code and not result.answer.abstained
-        and sandbox_available(version)
-    ):
+    result: AnswerResult = build_answer(question, version, get_retriever(), client=get_llm(), top_k=top_k)
+    if execute and result.answer.code and not result.answer.abstained and sandbox_available(version):
         result.execution_grade()
     graded = result.to_dict()
     graded["meta"] = {
@@ -308,6 +306,7 @@ def _answer(question: str, version: str, execute: bool, top_k: int) -> dict:
 
 
 # ---- routes ----------------------------------------------------------------
+
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
@@ -390,14 +389,8 @@ def stats() -> dict:
 def examples() -> dict:
     from docsthatrun.evals.run_evals import load_golden, load_unanswerable
 
-    answerable = [
-        {"question": i.question, "version": i.version, "answerable": True}
-        for i in load_golden()
-    ]
-    unanswerable = [
-        {"question": i.question, "version": i.version, "answerable": False}
-        for i in load_unanswerable()
-    ]
+    answerable = [{"question": i.question, "version": i.version, "answerable": True} for i in load_golden()]
+    unanswerable = [{"question": i.question, "version": i.version, "answerable": False} for i in load_unanswerable()]
     return {"answerable": answerable, "unanswerable": unanswerable}
 
 
@@ -443,9 +436,7 @@ def compare(req: CompareRequest, request: Request) -> dict:
     """Answer the same question for BOTH versions — the version-lock showcase."""
     _rate_limit(request)
     try:
-        versions = {
-            v: _answer(req.question, v, req.execute, req.top_k) for v in VERSIONS
-        }
+        versions = {v: _answer(req.question, v, req.execute, req.top_k) for v in VERSIONS}
     except HTTPException:
         raise
     except Exception as exc:

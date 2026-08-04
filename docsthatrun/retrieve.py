@@ -90,10 +90,7 @@ class HybridRetriever:
 
     def _tfidf_scores(self, q_tokens: List[str], candidates: List[Chunk]) -> Dict[str, float]:
         q_tf = Counter(q_tokens)
-        q_weights = {
-            term: (1.0 + math.log(tf)) * self._idf.get(term, 0.0)
-            for term, tf in q_tf.items()
-        }
+        q_weights = {term: (1.0 + math.log(tf)) * self._idf.get(term, 0.0) for term, tf in q_tf.items()}
         q_norm = math.sqrt(sum(w * w for w in q_weights.values())) or 1.0
         scores: Dict[str, float] = {}
         for chunk in candidates:
@@ -114,9 +111,7 @@ class HybridRetriever:
         ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         return {cid: rank for rank, (cid, _) in enumerate(ordered, start=1)}
 
-    def retrieve(
-        self, question: str, version: str, top_k: int = 5
-    ) -> List[RetrievalResult]:
+    def retrieve(self, question: str, version: str, top_k: int = 5) -> List[RetrievalResult]:
         if version not in ("v1", "v2"):
             raise ValueError(f"version must be 'v1' or 'v2', got {version!r}")
         q_tokens = tokenize(question)

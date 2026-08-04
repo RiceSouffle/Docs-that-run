@@ -44,9 +44,7 @@ def load_corpus(path: str = DEFAULT_CORPUS_PATH) -> List[Chunk]:
                 # bare, it reports "line 1" — json only sees this one stripped
                 # line, not the file — which sends you looking in the wrong
                 # place. Name the file and the real line number instead.
-                raise ValueError(
-                    f"{path}:{line_no} invalid JSON: {exc.msg} (at column {exc.colno})"
-                ) from exc
+                raise ValueError(f"{path}:{line_no} invalid JSON: {exc.msg} (at column {exc.colno})") from exc
             try:
                 chunks.append(
                     Chunk(
@@ -59,9 +57,7 @@ def load_corpus(path: str = DEFAULT_CORPUS_PATH) -> List[Chunk]:
                     )
                 )
             except KeyError as exc:  # pragma: no cover - corpus authoring guard
-                raise ValueError(
-                    f"{path}:{line_no} missing required field {exc}"
-                ) from exc
+                raise ValueError(f"{path}:{line_no} missing required field {exc}") from exc
     _validate(chunks, path)
     return chunks
 
@@ -73,6 +69,4 @@ def _validate(chunks: List[Chunk], path: str) -> None:
             raise ValueError(f"{path}: duplicate chunk id {chunk.id!r}")
         seen.add(chunk.id)
         if chunk.version not in ("v1", "v2", "both"):
-            raise ValueError(
-                f"{path}: chunk {chunk.id!r} has bad version {chunk.version!r}"
-            )
+            raise ValueError(f"{path}: chunk {chunk.id!r} has bad version {chunk.version!r}")

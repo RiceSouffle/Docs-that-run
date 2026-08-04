@@ -28,6 +28,7 @@ from .schema import VERSIONS
 
 # ---- tiny ANSI helper (no dependencies) ------------------------------------
 
+
 class _C:
     def __init__(self, enabled: bool):
         self.on = enabled
@@ -35,14 +36,29 @@ class _C:
     def _w(self, code: str, s: str) -> str:
         return f"\033[{code}m{s}\033[0m" if self.on else s
 
-    def bold(self, s):  return self._w("1", s)
-    def dim(self, s):   return self._w("2", s)
-    def green(self, s): return self._w("32", s)
-    def red(self, s):   return self._w("31", s)
-    def yellow(self, s):return self._w("33", s)
-    def blue(self, s):  return self._w("34", s)
-    def cyan(self, s):  return self._w("36", s)
-    def mag(self, s):   return self._w("35", s)
+    def bold(self, s):
+        return self._w("1", s)
+
+    def dim(self, s):
+        return self._w("2", s)
+
+    def green(self, s):
+        return self._w("32", s)
+
+    def red(self, s):
+        return self._w("31", s)
+
+    def yellow(self, s):
+        return self._w("33", s)
+
+    def blue(self, s):
+        return self._w("34", s)
+
+    def cyan(self, s):
+        return self._w("36", s)
+
+    def mag(self, s):
+        return self._w("35", s)
 
 
 def _color_enabled() -> bool:
@@ -103,6 +119,7 @@ def _render(result: AnswerResult, c: _C, show_retrieval: bool = True) -> None:
 
 # ---- commands --------------------------------------------------------------
 
+
 def _make_answer(question: str, version: str, retriever, client, execute: bool, top_k: int):
     result = build_answer(question, version, retriever, client=client, top_k=top_k)
     if execute and result.answer.code and not result.answer.abstained and sandbox_available(version):
@@ -148,11 +165,15 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("question", help="the question to ask")
     common.add_argument("--top-k", type=int, default=5, help="chunks to retrieve (default 5)")
     common.add_argument(
-        "--no-execute", dest="execute", action="store_false",
+        "--no-execute",
+        dest="execute",
+        action="store_false",
         help="skip running the generated snippet in the sandbox",
     )
     common.add_argument(
-        "--client", default=None, choices=CLIENT_NAMES,
+        "--client",
+        default=None,
+        choices=CLIENT_NAMES,
         help="anthropic | mock | auto (default auto)",
     )
 

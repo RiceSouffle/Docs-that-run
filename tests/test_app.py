@@ -63,10 +63,10 @@ def test_compare_shows_both_versions():
 
 # ---- production surface ----------------------------------------------------
 
+
 def test_response_has_meta_and_second_call_is_cached():
     answer_cache.clear()
-    q = {"question": "In Pydantic v2, how do I generate a JSON schema for a model?",
-         "version": "v2"}
+    q = {"question": "In Pydantic v2, how do I generate a JSON schema for a model?", "version": "v2"}
     r1 = client.post("/ask", json=q).json()
     assert r1["meta"]["cached"] is False and "latency_ms" in r1["meta"]
     r2 = client.post("/ask", json=q).json()
@@ -136,11 +136,13 @@ def test_rate_limit_key_honors_forwarded_header_only_when_trusted(monkeypatch):
 
     import app.main as m
 
-    req = m.Request({
-        "type": "http",
-        "headers": [(b"x-forwarded-for", b"203.0.113.9, 10.0.0.2")],
-        "client": ("10.0.0.1", 1234),
-    })
+    req = m.Request(
+        {
+            "type": "http",
+            "headers": [(b"x-forwarded-for", b"203.0.113.9, 10.0.0.2")],
+            "client": ("10.0.0.1", 1234),
+        }
+    )
     # Default: the direct TCP peer. The header is client-spoofable, so it must
     # be ignored unless a trusted proxy is explicitly declared.
     assert m._client_key(req) == "10.0.0.1"
