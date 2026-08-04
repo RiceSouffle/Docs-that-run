@@ -5,7 +5,7 @@
 [![evals](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml/badge.svg)](https://github.com/RiceSouffle/Docs-that-run/actions/workflows/evals.yml)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![core deps](https://img.shields.io/badge/core%20dependencies-0-brightgreen)
-![tests](https://img.shields.io/badge/tests-99%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-148%20passing-brightgreen)
 ![lint](https://img.shields.io/badge/lint-ruff-black)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -19,6 +19,12 @@ pass/fail.
 Because Pydantic v2 removed several v1 names outright (their imports raise), the
 execution check *is* the version-correctness check: a v2-flavoured answer run
 against the v1 sandbox fails, and vice-versa.
+
+"Pinned" is literal: the sandboxes install `pydantic==1.10.26` and
+`pydantic==2.13.4` (see [`scripts/setup_sandbox.sh`](scripts/setup_sandbox.sh)),
+not a `>=1.10,<2` range. Every number below is reproducible against those exact
+releases; with a range they would drift between builds with no code change and
+no signal.
 
 ![DocsThatRun compare view — the same question answered for v1 and v2, each graded in its own pinned sandbox: v1 FAILs, v2 PASSes](docs/compare-demo.svg)
 
@@ -72,20 +78,53 @@ sandbox. It works offline with the `MockClient` (no API key); set
 
 Prefer the terminal?
 
-```console
-$ python3 -m docsthatrun compare "In Pydantic v2, how do I serialize a model to a dict?"
+This runs offline, with no API key — copy and paste it (output abridged only
+where marked):
 
-── Pydantic v1 ──────────────────────────────
+```console
+$ python3 -m docsthatrun compare "In Pydantic v2, how do I serialize a model instance to a dictionary?"
+· using MockClient (offline; set ANTHROPIC_API_KEY for real Claude answers)
+Q: In Pydantic v2, how do I serialize a model instance to a dictionary?  (v1 vs v2)
+  The execution check is the version-correctness check: a snippet that used a
+  removed API fails the other version's sandbox.
+
+── Pydantic v1 ─────────────────────────────────────────────
+
   Answer [v1]   ✗ FAIL on v1 sandbox
+  See docs c_v2_dump.
+
+    │ from pydantic import BaseModel
+    │
+    │ class User(BaseModel):
+    │     name: str
+    │     age: int
+    │
     │ u = User(name='Ada', age=36)
     │ assert u.model_dump() == {'name': 'Ada', 'age': 36}
+
   stderr:
+    ...                                          # traceback trimmed
     AttributeError: 'User' object has no attribute 'model_dump'
 
-── Pydantic v2 ──────────────────────────────
+── Pydantic v2 ─────────────────────────────────────────────
+
   Answer [v2]   ✓ PASS on v2 sandbox
-    cited: c_v2_dump
+  See docs c_v2_dump.
+  cited: c_v2_dump
+
+    │ from pydantic import BaseModel
+    │
+    │ class User(BaseModel):
+    │     name: str
+    │     age: int
+    │
+    │ u = User(name='Ada', age=36)
+    │ assert u.model_dump() == {'name': 'Ada', 'age': 36}
 ```
+
+Same snippet, both sandboxes. `model_dump()` does not exist in Pydantic 1.10, so
+the v1 run raises — and `c_v2_dump` appears under `cited:` on the v2 side only,
+because a v2 chunk is never retrieved for a v1 query.
 
 Or run it fully containerized (API + both sandboxes baked in):
 
@@ -161,6 +200,11 @@ data (27 doc chunks, 25 answerable golden questions, 6 unanswerable):
 | crisply version-locked checks | **17 / 25 (68%)** | fail on the *other* version; the rest are v1 APIs kept as deprecated v2 shims |
 | unanswerable abstention | **100%** | out-of-corpus questions refused |
 | answerable over-abstention | **0%** | in-corpus questions answered |
+
+Every figure above is pinned by a test, so it cannot drift out from under this
+table unnoticed — the version-lock rate is asserted as exactly 17/25 rather than
+as a floor, which is only meaningful because the sandbox venvs install exact
+pydantic releases.
 
 > **Honest caveat:** these are seed-corpus numbers. recall@5 = 1.0 reflects a
 > small, hand-curated corpus with clean version separation, *not* messy

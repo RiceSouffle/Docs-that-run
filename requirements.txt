@@ -2,7 +2,7 @@
 # the Python standard library alone — no install needed.
 #
 # For the real answer layer:
-anthropic>=0.40
+anthropic>=0.117
 # For the HTTP API:
 fastapi>=0.110
 uvicorn>=0.29

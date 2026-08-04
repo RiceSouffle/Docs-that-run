@@ -5,4 +5,4 @@
 # The core (retrieval, sandbox, evals with MockClient) still needs none of this.
 fastapi>=0.110
 uvicorn[standard]>=0.29
-anthropic>=0.40
+anthropic>=0.117

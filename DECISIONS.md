@@ -29,6 +29,27 @@ required; `field_validator`/`ConfigDict` don't exist in v1). This is a real
 finding, not a bug — and it's exactly the kind of failure-mode nuance the
 sandbox surfaces.
 
+**Pinned means pinned.** The sandbox venvs install `pydantic==1.10.26` and
+`pydantic==2.13.4`, not `>=1.10,<2` and `>=2,<3`. Ranges were the original
+choice and they're the wrong one here: 68% is a claim *about two specific
+libraries*, so with a range two builds a month apart would grade against
+different code and the published rate would drift with no commit to blame. The
+cost is that a new pydantic release doesn't get picked up automatically — which
+is the point. Bumping is a deliberate act: change the pin, re-run
+`make evals-answers`, and update the number wherever it appears. A test asserts
+the rate is exactly 17/25 so a silent drift fails CI instead of quietly making
+four documents wrong.
+
+**The sandbox runs in an empty directory.** `python -c` puts `''` at
+`sys.path[0]`, which resolves to the process's working directory at every
+import. Grading from the repo root therefore let a snippet `import docsthatrun`
+— and, far worse, would let a `pydantic.py` sitting next to the server shadow
+the venv's pinned pydantic, turning every verdict into a claim about the wrong
+library while still reporting PASS. Each grade now gets a throwaway directory
+that is also its cwd, and the launcher scrubs `''` from `sys.path` before the
+snippet runs. Two tests pin it from both directions, because this is the one
+bug that would invalidate everything else on this page.
+
 Answers that *don't* reduce to a runnable check (conceptual "why" questions) are
 out of scope for v0 and are the natural place a **human-validated LLM judge**
 gets added next (see ROADMAP).
@@ -72,8 +93,8 @@ presented as a quality number. Real quality comes from `--client anthropic`.
 The answer contract (`answer` / `code` / `citations` / `abstained`) is enforced
 with `output_config.format` (JSON schema), so parsing never guesses. Citations
 are cross-checked against the retrieved ids and hallucinated ids are dropped
-(`answer._coerce`). Model defaults to `claude-opus-4-8` with adaptive thinking;
-overridable via `DOCSTHATRUN_MODEL` / `DOCSTHATRUN_EFFORT`.
+(`answer._coerce`). Model defaults to `claude-opus-5` with adaptive thinking;
+overridable via `DOCSTHATRUN_MODEL` / `DOCSTHATRUN_EFFORT` / `DOCSTHATRUN_MAX_TOKENS`.
 
 ## Robustness & hardening
 
@@ -99,12 +120,17 @@ defects, now fixed and pinned by regression tests:
   Only a *successful* probe is cached: a probe that races a still-running
   `make sandbox` re-checks later instead of disabling grading for the process
   lifetime.
-- **The CI gate no longer silently passes when nothing is gradable.** If the
-  sandbox is up but every answer abstained, `executable_pct` is `None`; the old
-  guard skipped the check, so a total collapse looked like a pass. It's now an
-  explicit gate failure. And `executable_pct`'s denominator is every answer
-  that *claimed* to answer (didn't abstain) — an answer with no runnable code
-  counts against the number instead of being silently excluded from it.
+- **The CI gate no longer silently passes when nothing is gradable.** An
+  execution gate that did not execute must not pass. Two versions of this bug
+  were fixed: `executable_pct` being `None` (every answer abstained) used to
+  skip the check entirely, and — worse — a single unavailable venv set one
+  `all(...)` flag false, which discarded the *other* version's real results and
+  skipped the gate, so a run that graded half the corpus printed GATE PASSED.
+  `executable_pct` is now computed over the items that were actually gradable,
+  ungraded items are counted separately, and an unavailable version is a named
+  failure. And the denominator is every answer that *claimed* to answer (didn't
+  abstain) — an answer with no runnable code counts against the number instead
+  of being silently excluded from it.
 - **API inputs are bounded** (`top_k` constrained; unknown versions 400) and
   generation failures return a clean `502` rather than leaking a stack trace.
 

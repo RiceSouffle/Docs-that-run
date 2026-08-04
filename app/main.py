@@ -39,6 +39,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("The API server needs fastapi + uvicorn: pip install -r requirements.txt") from exc
 
+from docsthatrun import __version__ as APP_VERSION
 from docsthatrun.answer import AnswerResult, build_answer
 from docsthatrun.cache import TTLCache
 from docsthatrun.config import settings
@@ -52,8 +53,6 @@ from docsthatrun.schema import VERSIONS
 
 configure_logging(settings.log_level, settings.log_json)
 log = logging.getLogger("docsthatrun.api")
-
-APP_VERSION = "0.3.2"
 
 metrics = Metrics()
 answer_cache = TTLCache(settings.cache_max, settings.cache_ttl_s)

@@ -123,7 +123,7 @@ passages relevant to the question, paste those passages into the request, and in
 the model to answer only from them. The model stops being the source of facts and becomes
 a rewriter of supplied facts. Its memory of Pydantic's API stops mattering; what matters
 is what you handed it. The instruction is literal — rule 1 of the system prompt at
-`docsthatrun/llm.py:45` reads *"Answer ONLY using the provided documentation chunks. Do
+`docsthatrun/llm.py:46` reads *"Answer ONLY using the provided documentation chunks. Do
 not use outside knowledge."*
 
 A **corpus** is the fixed set of documents the system may search. A **chunk** is one
@@ -139,7 +139,7 @@ Each record has six string fields; here is line 1, abbreviated:
  "code": "from pydantic import BaseModel\n\nclass User(BaseModel):\n    name: str\n    age: int"}
 ```
 
-Only `title`, `text`, and `code` are searchable (`schema.py:26-28`). The `id` and `topic`
+Only `title`, `text`, and `code` are searchable (`schema.py:29-31`). The `id` and `topic`
 are not indexed.
 
 **Tokenization** is cutting text into the units you match on; those units are **tokens**.
@@ -199,7 +199,7 @@ Summed over all matching terms, that chunk scores **8.52**. The next best v2 chu
 **TF-IDF with cosine similarity** is the second ranker. It turns each document into a
 vector — one weight per term, here `(1 + ln(f)) · idf` — and measures the angle between
 the query vector and each document vector, ignoring their lengths: the dot product
-divided by both vector lengths (`retrieve.py:109`). For the same query, `c_v2_dump` scores
+divided by both vector lengths (`retrieve.py:106`). For the same query, `c_v2_dump` scores
 **0.387** and the runner-up scores 0.075. Where BM25 saturates frequency with an explicit
 `k1` knob and is unbounded in scale, cosine damps frequency with a logarithm and is
 bounded near 1.
@@ -262,7 +262,7 @@ standing instructions that apply to every request, and a **user prompt** carryin
 specific question. Here the system prompt (`llm.py:41-57`) is five numbered rules: answer
 only from the supplied chunks, be correct for the target version, return a runnable
 snippet ending in an `assert`, cite the chunk ids used, and abstain rather than guess. The
-user prompt (`llm.py:113-118`) is three labelled blocks — target version, question, then
+user prompt (`llm.py:109-125`) is three labelled blocks — target version, question, then
 each retrieved chunk rendered as `[c_v1_dict] (version=v1) <title> ...`. The chunk id is
 printed in brackets deliberately: the model cannot cite an identifier it was never shown.
 
@@ -282,11 +282,11 @@ required keys:
 | `abstained` | boolean | true if refusing to answer |
 
 The schema is passed to the API as `output_config={"format": {"type": "json_schema", ...}}`
-(`llm.py:155-158`), so the model is constrained to emit that object, and downstream code
+(`llm.py:152-161`), so the model is constrained to emit that object, and downstream code
 reads four fields by name and never parses English.
 
 Constrained is not guaranteed. A reply cut short by the token budget stops mid-object and
-is not valid JSON. `_extract_json` (`llm.py:68-100`) handles it: strip stray code fences,
+is not valid JSON. `_extract_json` (`llm.py:74-111`) handles it: strip stray code fences,
 try `json.loads`, and on failure retry with a string-aware decoder from the first `{`, so
 a brace inside a code field does not derail it. If parsing still fails, or the API reports
 a refusal, the client returns a pre-built abstention. **A malformed reply becomes a
@@ -295,7 +295,7 @@ refusal, never a crash.**
 A **citation** here is not a URL — it is the id of a chunk that was in the prompt, like
 `c_v2_dump`. It answers "which of the 27 corpus entries did this come from", which a
 reader can check by eye. A model can still emit an id it was never shown, so `_coerce`
-(`answer.py:27-36`) filters the list against what was actually retrieved:
+(`answer.py:40-56`) filters the list against what was actually retrieved:
 
 ```python
 citations = [c for c in raw.get("citations", []) if c in retrieved_ids]
@@ -324,7 +324,7 @@ and `.venvs/pydantic_v2` with `pydantic>=2,<3` plus `pydantic-settings>=2,<3`, b
 moved settings support into a separate package. Measured on the development machine:
 **pydantic 1.10.26** and **pydantic 2.13.4**.
 
-`grade(code, version)` (`sandbox.py:141`) writes the snippet to a temporary `.py` file and
+`grade(code, version)` (`sandbox.py:329`) writes the snippet to a temporary `.py` file and
 runs it with the matching venv's interpreter. Passing is `returncode == 0`. The subjective
 question "is this answer good?" becomes the objective question "did exit code 0 come
 back?".
@@ -455,21 +455,21 @@ Trace the real question *"In Pydantic v2, how do I serialize a model instance to
 dictionary?"*, asked against **v1** — the mismatch that makes the mechanism visible.
 
 1. **Request.** `POST /ask` with `{"question": ..., "version": "v1", "execute": true}`.
-   FastAPI validates the body against `AskRequest` (`app/main.py:184-196`) before any
+   FastAPI validates the body against `AskRequest` (`app/main.py:238-247`) before any
    handler runs: the question must be 1–2000 characters and `top_k` an integer in 1–50.
-2. **Rate limit.** `_rate_limit` (`app/main.py:353`) spends one token from the caller's
+2. **Rate limit.** `_rate_limit` (`app/main.py:511`) spends one token from the caller's
    bucket, refusing with HTTP 429 and a `Retry-After` header if it is empty.
 3. **Cache lookup.** The key is `(question.strip(), version, top_k, execute)`
-   (`app/main.py:257`). A hit returns immediately with `meta.cached = true`.
-4. **Retrieval.** `build_answer` (`answer.py:20-24`) calls `retriever.retrieve(question,
+   (`app/main.py:320`). A hit returns immediately with `meta.cached = true`.
+4. **Retrieval.** `build_answer` (`answer.py:13-38`) calls `retriever.retrieve(question,
    "v1", top_k=5)`. The version filter cuts 27 chunks to the 14 that are `v1` or `both`.
    BM25 and TF-IDF each rank those, RRF fuses the two rank lists, and the top 5 come back.
    `c_v2_dump` — the chunk that actually answers this question — is **not among them**. It
    was excluded at the candidate stage.
 5. **Generation.** `client.generate(...)` builds the prompt from the 5 v1 chunks and calls
-   the model, which returns the four-key JSON object. `_coerce` (`answer.py:27-36`) drops
+   the model, which returns the four-key JSON object. `_coerce` (`answer.py:40-56`) drops
    any citation id that was not retrieved.
-6. **Grading.** `AnswerResult.execution_grade()` (`answer.py:53-56`) calls
+6. **Grading.** `AnswerResult.execution_grade()` (`answer.py:73-76`) calls
    `grade(code, "v1")`. The snippet is written to a temp file and launched as
    `.venvs/pydantic_v1/bin/python -c "<launcher>" /tmp/xxxx.py` — its own process group,
    an environment scrubbed to just `PATH` and an empty `PYTHONPATH`, and CPU, file-size,
@@ -516,7 +516,7 @@ duplicate** rather than overwriting. It needs no API key, which is what lets CI 
 full pipeline for free.
 
 **`AnthropicClient`** is the real path. It calls Claude with the model from config
-(default `claude-opus-4-8`), `max_tokens=4096`, adaptive thinking, and the JSON schema as
+(default `claude-opus-5`), a configurable `max_tokens` (8192), adaptive thinking, and the JSON schema as
 the required output format. The SDK is configured with a 60-second timeout and 2 retries,
 so a hung request cannot wedge a worker. Every failure path — refusal, truncation, empty
 body, unparseable JSON — degrades to an abstention carrying the model's stop reason for
@@ -608,7 +608,7 @@ Every tunable is an environment variable:
 | Variable | Default | Effect |
 |---|---|---|
 | `DOCSTHATRUN_LLM` | `auto` | `mock`, `anthropic`, or auto-detect by API key |
-| `DOCSTHATRUN_MODEL` | `claude-opus-4-8` | model id |
+| `DOCSTHATRUN_MODEL` | `claude-opus-5` | model id |
 | `DOCSTHATRUN_EFFORT` | `medium` | reasoning effort |
 | `DOCSTHATRUN_LLM_TIMEOUT` | `60.0` | per-call timeout, seconds |
 | `DOCSTHATRUN_LLM_RETRIES` | `2` | SDK retries on 429/5xx |
@@ -630,7 +630,7 @@ Every tunable is an environment variable:
 
 ### Demo UI — `app/static/index.html`
 
-One file, 536 lines, no build step. Three modes — v2, v1, and diff (both side by side).
+One file, 598 lines, no build step. Three modes — v2, v1, and diff (both side by side).
 The result is a **verdict instrument**: a large glyph cell reading PASS, FAIL, ABSTAIN, or
 NO GRADE, beside metadata rows for the target sandbox, the process exit code, and the
 latency (marked `· cached` on a cache hit). Below it sits the answer, the cited chunk ids,
@@ -672,11 +672,12 @@ DocsThatRun eval report
 ============================================================
 corpus=27 golden=25 unanswerable=6
 retrieval: recall@3=1.0  recall@5=1.0  mrr=0.98
-client=MockClient  sandbox=True
-answers: executable%=1.0 (n=25 answered)  unanswerable_abstention=1.0  answerable_over_abstention=0.0
+client=MockClient  sandbox: v1=up  v2=up
+answers: executable%=1.0 (n=25 graded)  unanswerable_abstention=1.0  answerable_over_abstention=0.0
 taxonomy: pass=25
-latency(ms): mean=203.4  p50=237.7  p95=251.0  max=336.7
-note: MockClient replays the answer key: executable_pct here is a PLUMBING check, not a quality claim.
+answer latency(ms): mean=0.2  p50=0.2  p95=0.3  max=0.3
+grade latency(ms): mean=244.3  p50=288.2  p95=295.2  max=398.0
+note: MockClient replays the answer key: executable_pct here is a PLUMBING check, not a quality claim. Run with DOCSTHATRUN_LLM=anthropic for a real measurement.
 
 GATE PASSED
 ```
@@ -687,9 +688,24 @@ GATE PASSED
 |---|---|
 | `recall@k` | share of questions whose gold chunk appeared in the top k |
 | `mrr` | mean of 1 ÷ (rank of the first gold chunk) |
-| `executable_pct` | share of **non-abstained** answers whose snippet ran and exited 0 |
+| `executable_pct` | share of **non-abstained, gradable** answers whose snippet ran and exited 0 |
+| `ungraded_count` | non-abstained answers whose version's sandbox was down — excluded from the line above, never folded into it |
 | `unanswerable_abstention` | share of the 6 unanswerable questions correctly refused |
 | `answerable_over_abstention` | share of the 25 answerable questions wrongly refused |
+| `answer_latency_ms` | retrieval + LLM, across all 31 questions |
+| `grade_latency_ms` | sandbox execution only, across the graded items |
+
+The two latency numbers are separate on purpose. They used to be one, measured around
+both stages: since a sandbox run is ~250 ms and the mock answer path is ~0.2 ms, the
+published "p95 latency" was really a statement about subprocess startup. The unanswerable
+questions weren't timed at all, so the distribution silently covered 25 of the 31
+questions the harness answers.
+
+`answerable_over_abstention` and `taxonomy["over_abstention"]` are related but not equal,
+which is worth knowing before you try to reconcile them: the rate counts every abstention
+on an answerable item, while the taxonomy bucket counts only abstentions where retrieval
+*did* surface the gold chunk. An abstention that also missed its gold chunk is filed under
+`retrieval_miss`, because retrieval is the upstream cause.
 
 The two abstention rates exist as a pair on purpose. Abstaining costs nothing on
 `executable_pct` — an abstention is excluded from that denominator — so without the
@@ -725,9 +741,12 @@ tightened as the corpus grows:
 | `answerable_over_abstention` | ≤ 0.20 | the system games the other gates by refusing |
 | `executable_pct` | ≥ 0.60 | answers that look right but do not run |
 
-The `executable_pct` gate applies only when the sandbox is available. If the sandbox *is*
-up but every answerable item abstained, that is an explicit failure rather than a silent
-skip.
+An execution gate that did not execute does not pass. A version whose venv is missing is
+a *named* gate failure — `sandbox unavailable for v1 — 12 answerable item(s) went
+ungraded` — and `executable_pct` is computed over the items that were actually gradable,
+with the rest counted in `ungraded_count`. This is not hypothetical: the gate previously
+keyed off a single `all(...)` flag across both versions, so a broken v1 venv discarded
+every real v2 result and printed **GATE PASSED** having graded half the corpus.
 
 **How a metric lied, and what fixed it.** `executable_pct` used to divide by *items that
 produced an execution result* — items that had code to run. Consider a client that answers
@@ -789,15 +808,17 @@ all. Genuinely untrusted input at scale would want gVisor or a microVM above all
 BM25, so the "hybrid" is two lexical opinions rather than lexical plus meaning-based. The
 two channels agree far more than a true sparse+dense hybrid would.
 
-**Version pins are ranges, not exact.** Rebuilding the sandboxes months from now can
-install different patch releases than the 1.10.26 / 2.13.4 recorded here.
+**The corpus is hand-curated.** Every number in this guide is measured against 27
+chunks with clean version separation. Real docs are messier, and recall@5 = 1.0 would not
+survive contact with them.
 
 **Smaller known rough edges.** The RRF implementation drops zero-scoring documents before
 ranking, so a document only one channel scored contributes one term rather than one term
 plus a large-rank term — a mild deviation from textbook RRF. The retrieval table's score
-bar is normalized to the top result, so it shows relative order, not confidence. `make
-clean` misses nested `__pycache__` directories. The UI silently ignores a failed `/health`
-or `/examples` call at boot.
+bar is normalized to the top result, so it shows relative order, not confidence. The UI
+silently ignores a failed `/health` or `/examples` call at boot — deliberately, so a
+degraded sandbox doesn't make the demo page look broken, but it does mean the status
+chips can be stale.
 
 ## 8. Running it yourself
 
