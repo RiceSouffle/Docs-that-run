@@ -41,7 +41,42 @@ def test_at_least_half_golden_are_crisply_version_locked():
             locked += 1
     rate = locked / total
     print(f"\nversion-locked: {locked}/{total} = {rate:.0%}")
-    assert rate >= 0.5, f"only {rate:.0%} of golden checks are version-locked"
+    # Pinned to the exact published figure, not a loose floor. README, GUIDE,
+    # DECISIONS and ROADMAP all quote 17/25 (68%); with the sandbox venvs pinned
+    # to exact pydantic releases this is deterministic, so any drift should fail
+    # here and force those four documents to be updated together.
+    assert (locked, total) == (17, 25), (
+        f"version-lock rate is now {locked}/{total} ({rate:.0%}), but README.md, "
+        "GUIDE.md, DECISIONS.md and ROADMAP.md all publish 17/25 (68%) — "
+        "update the docs and this assertion together"
+    )
+
+
+@needs_sandbox
+def test_snippet_cannot_import_from_the_servers_working_directory():
+    """The containment guarantee, stated as a test.
+
+    `python -c` resolves sys.path's '' entry against the current directory, so
+    running the grader from the repo root used to let a snippet import the
+    application's own packages — and, far worse, let a pydantic.py sitting next
+    to the server shadow the venv's pinned pydantic, quietly turning every
+    verdict into a claim about the wrong library.
+    """
+    res = grade("import docsthatrun\n", "v2")
+    assert not res.passed
+    assert "No module named" in res.stderr
+
+
+@needs_sandbox
+def test_snippet_imports_the_pinned_pydantic_not_a_shadowing_module(tmp_path, monkeypatch):
+    """Same guarantee from the other side: plant a decoy pydantic.py in the
+    process's working directory and confirm the sandbox still sees the venv's."""
+    (tmp_path / "pydantic.py").write_text("VERSION = 'SHADOWED'\n")
+    monkeypatch.chdir(tmp_path)
+
+    res = grade("import pydantic\nprint(pydantic.VERSION)\n", "v2")
+    assert res.passed, res.stderr[-300:]
+    assert res.stdout.strip().startswith("2."), f"sandbox imported {res.stdout.strip()!r}"
 
 
 # ---- resource limits (defence-in-depth) ------------------------------------
@@ -143,32 +178,45 @@ def test_background_process_does_not_outlive_a_passing_grade():
 
 
 @needs_sandbox
-def test_no_temp_file_leak_on_any_exit_path():
-    """Capturing output to files means three temp files per grade. Every exit
-    path — success, failure, timeout, CPU kill, empty code — must unlink all of
-    them, or a long-running server slowly fills its temp directory."""
+def test_no_temp_dir_leak_on_any_exit_path():
+    """Every grade gets a working directory holding the snippet, both capture
+    files, and anything the snippet itself wrote. Every exit path — pass, fail,
+    wall timeout, CPU kill, empty code — must remove it, or a long-running
+    server slowly fills its temp directory."""
     import glob
     import tempfile
 
-    td = tempfile.gettempdir()
+    pattern = os.path.join(tempfile.gettempdir(), "dtr-*")
 
-    def temp_count():
-        return sum(len(glob.glob(os.path.join(td, pat))) for pat in ("tmp*.out", "tmp*.err", "tmp*.py"))
+    def leftovers():
+        return set(glob.glob(pattern))
 
-    before = temp_count()
+    before = leftovers()
     grade("assert 1 == 1\n", "v2")  # pass
     grade("raise ValueError('x')\n", "v2")  # non-zero exit
     grade("import time\ntime.sleep(30)\n", "v2", timeout=2)  # wall timeout
     grade("while True: pass\n", "v2", timeout=30, cpu_seconds=1)  # CPU kill
     grade("   \n", "v2")  # empty snippet
-    assert temp_count() == before
+    grade("open('litter.txt', 'w').write('x' * 1000)\n", "v2")  # snippet writes a file
+    assert leftovers() == before
 
 
 @needs_sandbox
+def test_snippet_writes_land_in_the_throwaway_workdir():
+    """A snippet writing to a relative path must not touch the caller's tree."""
+    res = grade("open('side_effect.txt', 'w').write('x')\n", "v2")
+    assert res.passed
+    assert not os.path.exists("side_effect.txt")
+
+
 def test_v2_probe_requires_pydantic_settings():
     """The v2 golden set uses pydantic_settings, so a v2 venv without it is not
     usable — reporting it available charges the ModuleNotFoundError to answer
-    quality instead of to the environment."""
+    quality instead of to the environment.
+
+    Deliberately *not* marked @needs_sandbox: it inspects a module constant, and
+    the machine most in need of the check is the one whose venvs aren't built.
+    """
     from docsthatrun.sandbox import _PROBE_IMPORTS
 
     assert "pydantic_settings" in _PROBE_IMPORTS["v2"]
@@ -229,8 +277,29 @@ def test_failed_probe_is_not_reforked_on_every_call(tmp_path, monkeypatch):
     monkeypatch.setitem(sb.VENV_PYTHON, "v2", str(failing))
 
     spawns = []
-    real_run = sb.subprocess.run
-    monkeypatch.setattr(sb.subprocess, "run", lambda *a, **k: (spawns.append(1), real_run(*a, **k))[1])
+    real_popen = sb.subprocess.Popen
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: (spawns.append(1), real_popen(*a, **k))[1])
     for _ in range(20):
         assert sb.sandbox_available("v2") is False
     assert len(spawns) == 1, f"probed {len(spawns)} times; expected 1 within the cooldown"
+
+
+def test_probe_runs_outside_the_servers_working_directory(tmp_path, monkeypatch):
+    """The probe decides whether a venv is usable, so it must not be satisfied by
+    a stray module in whatever directory the server happens to be running from —
+    otherwise a broken venv is declared healthy and every later verdict is junk."""
+    import docsthatrun.sandbox as sb
+
+    monkeypatch.setattr(sb, "_IMPORT_OK", {})
+    monkeypatch.setattr(sb, "_IMPORT_FAIL_AT", {})
+    # A "venv python" that reports success only if it can import `dtr_decoy`.
+    probe = tmp_path / "python_probe"
+    probe.write_text(f'#!/bin/sh\nexec {sys.executable} -c "import dtr_decoy"\n')
+    probe.chmod(0o755)
+    monkeypatch.setitem(sb.VENV_PYTHON, "v2", str(probe))
+    # Plant the decoy in the *parent's* cwd. If the probe inherited it, the
+    # import would succeed and we would wrongly call the sandbox available.
+    (tmp_path / "dtr_decoy.py").write_text("")
+    monkeypatch.chdir(tmp_path)
+
+    assert sb.sandbox_available("v2") is False

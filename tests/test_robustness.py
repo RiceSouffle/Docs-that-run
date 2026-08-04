@@ -56,14 +56,17 @@ def test_extract_json_fallback_is_string_aware():
 # ---- CI gate (run_evals.check_gate) ----------------------------------------
 
 
-def _base_report(executable_pct, sandbox=True):
+def _base_report(executable_pct, by_version=None, ungraded=0):
+    by_version = {"v1": True, "v2": True} if by_version is None else by_version
     return {
         "retrieval": {"recall_at_5": 1.0, "mrr": 1.0},
-        "sandbox_available": sandbox,
+        "sandbox_available": all(by_version.values()),
+        "sandbox_by_version": by_version,
         "answers": {
             "executable_pct": executable_pct,
             "unanswerable_abstention": 1.0,
             "answerable_over_abstention": 0.0,
+            "ungraded_count": ungraded,
         },
     }
 
@@ -72,8 +75,8 @@ def test_gate_fails_when_sandbox_up_but_nothing_gradable():
     # executable_pct is None when every answerable item abstained. With the
     # sandbox up that is a regression, and the gate must catch it (it used to
     # silently skip).
-    failures = check_gate(_base_report(None, sandbox=True))
-    assert any("nothing to grade" in f for f in failures)
+    failures = check_gate(_base_report(None))
+    assert any("could not be measured" in f for f in failures)
 
 
 def test_gate_fails_on_low_executable_pct():
@@ -85,9 +88,25 @@ def test_gate_passes_on_healthy_report():
     assert check_gate(_base_report(1.0)) == []
 
 
-def test_gate_ignores_executable_pct_when_sandbox_down():
-    # No sandbox -> executable_pct is not enforced at all.
-    assert check_gate(_base_report(None, sandbox=False)) == []
+def test_gate_fails_when_one_version_could_not_be_graded():
+    """The regression this gate exists to prevent.
+
+    With v1's venv broken and v2's healthy, grading still ran for every v2 item
+    — but the old gate keyed off a single `all(...)` flag, so it discarded those
+    real results and printed GATE PASSED having executed half the corpus. An
+    execution gate that could not execute must not pass, and the failure has to
+    name the version so the fix is obvious.
+    """
+    failures = check_gate(_base_report(1.0, by_version={"v1": False, "v2": True}, ungraded=12))
+    assert any("sandbox unavailable for v1" in f for f in failures)
+    assert any("12 answerable item(s) went ungraded" in f for f in failures)
+
+
+def test_gate_fails_when_no_sandbox_at_all():
+    # Nothing was executed anywhere: reporting a pass would be a lie.
+    failures = check_gate(_base_report(None, by_version={"v1": False, "v2": False}, ungraded=25))
+    assert any("sandbox unavailable for v1, v2" in f for f in failures)
+    assert any("could not be measured" in f for f in failures)
 
 
 # ---- Sandbox process-group isolation (sandbox.grade) -----------------------

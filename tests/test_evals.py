@@ -13,7 +13,7 @@ from docsthatrun.evals.run_evals import (
     check_gate,
     evaluate,
 )
-from docsthatrun.schema import GoldenItem
+from docsthatrun.schema import Answer, GoldenItem
 
 
 def test_metrics_basic():
@@ -43,10 +43,29 @@ def test_report_includes_taxonomy_and_latency():
     answers = report["answers"]
     # every answerable item is bucketed, buckets sum to the golden set size
     assert sum(answers["taxonomy"].values()) == report["golden_size"]
-    lat = answers["latency_ms"]
+    lat = answers["answer_latency_ms"]
     assert lat and lat["p50"] <= lat["p95"] <= lat["max"]
-    # each row carries its outcome + latency
-    assert all("outcome" in r and "latency_ms" in r for r in answers["rows"])
+    # each row carries its outcome + answer latency
+    assert all("outcome" in r and "answer_ms" in r for r in answers["rows"])
+
+
+def test_answer_latency_covers_every_question_and_excludes_grading():
+    """Answer latency must describe the retrieval + LLM path only.
+
+    It used to wrap the sandbox run too, so the published p95 was really a
+    statement about subprocess startup; and the 6 unanswerable questions were
+    never timed, quietly narrowing the distribution to 25 of 31.
+    """
+    report = evaluate(run_answers=True, client_name="mock")
+    answers = report["answers"]
+    rows = answers["rows"]
+    graded = [r for r in rows if "grade_ms" in r]
+    if not graded:
+        pytest.skip("sandbox venvs not set up")
+    # Grading is reported on its own axis, and it dominates — which is exactly
+    # why folding it into "answer latency" was misleading.
+    assert answers["grade_latency_ms"]["mean"] > answers["answer_latency_ms"]["mean"]
+    assert all(r["answer_ms"] < r["grade_ms"] for r in graded)
 
 
 @pytest.mark.parametrize(
@@ -68,8 +87,11 @@ def test_latency_stats_none_on_empty():
 
 
 def _fake_res(retrieved_ids, abstained=False, code="x", ex=None):
+    # A real Answer, not a stand-in: has_runnable_code() is the shared predicate
+    # the CLI, the API and this harness all gate on, so faking it past would
+    # test nothing.
     return SimpleNamespace(
-        answer=SimpleNamespace(abstained=abstained, code=code),
+        answer=Answer(answer="a", code=code, citations=[], abstained=abstained),
         retrieved=[SimpleNamespace(chunk=SimpleNamespace(id=i)) for i in retrieved_ids],
         execution=ex,
     )

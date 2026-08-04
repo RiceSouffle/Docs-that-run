@@ -21,7 +21,7 @@ from typing import List, Optional
 
 from .answer import AnswerResult, build_answer
 from .corpus import load_corpus
-from .llm import CLIENT_NAMES, get_client
+from .llm import CLIENT_NAMES, MockClient, get_client
 from .retrieve import HybridRetriever
 from .sandbox import sandbox_available
 from .schema import VERSIONS
@@ -122,7 +122,7 @@ def _render(result: AnswerResult, c: _C, show_retrieval: bool = True) -> None:
 
 def _make_answer(question: str, version: str, retriever, client, execute: bool, top_k: int):
     result = build_answer(question, version, retriever, client=client, top_k=top_k)
-    if execute and result.answer.code and not result.answer.abstained and sandbox_available(version):
+    if execute and result.answer.has_runnable_code() and not result.answer.abstained and sandbox_available(version):
         result.execution_grade()
     return result
 
@@ -192,8 +192,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     c = _C(_color_enabled())
 
-    # Mirror the API's bound: top_k <= 0 would retrieve nothing (or, negative,
-    # drop the top chunks via ordered[:-k]) and silently yield a wrong answer.
+    # Mirror the API's bound: 0 retrieves nothing, and a negative value slices
+    # via ordered[:-k], silently dropping the lowest-ranked chunks and changing
+    # how much context the answer is built from. Both yield a wrong answer with
+    # no error. (retrieve() now rejects these at the source too; this keeps the
+    # CLI's error message friendly rather than a traceback.)
     if not (1 <= args.top_k <= 50):
         print(c.red("--top-k must be between 1 and 50"), file=sys.stderr)
         return 2
@@ -204,7 +207,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Key the notice off the client actually built, not the environment: with a
     # key exported but `--client mock` passed, the old check stayed silent while
     # answers really were coming from the offline fixture replay.
-    if type(client).__name__ == "MockClient":
+    if isinstance(client, MockClient):
         print(c.dim("· using MockClient (offline; set ANTHROPIC_API_KEY for real Claude answers)"))
 
     if args.command == "ask":

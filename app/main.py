@@ -292,7 +292,7 @@ def _answer(question: str, version: str, execute: bool, top_k: int) -> dict:
 
     t0 = time.perf_counter()
     result: AnswerResult = build_answer(question, version, get_retriever(), client=get_llm(), top_k=top_k)
-    if execute and result.answer.code and not result.answer.abstained and sandbox_available(version):
+    if execute and result.answer.has_runnable_code() and not result.answer.abstained and sandbox_available(version):
         result.execution_grade()
     graded = result.to_dict()
     graded["meta"] = {

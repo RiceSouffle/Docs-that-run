@@ -43,6 +43,19 @@ class Answer:
     citations: List[str] = field(default_factory=list)
     abstained: bool = False
 
+    def has_runnable_code(self) -> bool:
+        """True when there is something worth handing to the sandbox.
+
+        The ``strip()`` is the whole point, and the reason this lives here rather
+        than being re-spelled at each call site: whitespace-only "code" is still
+        no code, and without the strip ``"  \\n"`` reaches the sandbox, fails
+        with an empty stderr, and lands in the ``runtime_error`` bucket —
+        blaming the answer for what is really an empty-snippet bug. The eval
+        harness got this right and the CLI and API did not; one predicate keeps
+        all three honest.
+        """
+        return bool((self.code or "").strip())
+
     def to_dict(self) -> dict:
         return {
             "answer": self.answer,

@@ -26,7 +26,7 @@ from typing import List, Optional
 
 from ..answer import AnswerResult, build_answer
 from ..corpus import load_corpus
-from ..llm import CLIENT_NAMES, get_client
+from ..llm import CLIENT_NAMES, MockClient, get_client
 from ..retrieve import HybridRetriever
 from ..sandbox import sandbox_available
 from ..schema import GoldenItem
@@ -43,7 +43,7 @@ GATE = {
     "mrr": 0.60,
     "unanswerable_abstention": 0.80,
     "answerable_over_abstention_max": 0.20,
-    "executable_pct_min": 0.60,  # only enforced when the sandbox is available
+    "executable_pct_min": 0.60,
 }
 
 
@@ -84,10 +84,7 @@ def _classify_outcome(item: GoldenItem, res: AnswerResult) -> str:
         return "retrieval_miss"
     if res.answer.abstained:
         return "over_abstention"
-    # strip(): whitespace-only "code" is still no code — without it, "  \n"
-    # reaches the sandbox, fails with an empty stderr, and lands in
-    # runtime_error, blaming the wrong stage.
-    if not (res.answer.code or "").strip():
+    if not res.answer.has_runnable_code():
         return "no_code"
     if ex is None or not ex.available:
         return "not_graded"
@@ -178,36 +175,51 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
     # ---- Layers 2 & 3: answers, execution grading, abstention --------------
     client = get_client(client_name)
     report["client"] = type(client).__name__
-    # Per-version, not a single AND across both: with one venv broken, a global
-    # flag would also stop grading the *healthy* version, turn all 25 items into
-    # `not_graded`, and — since the executable gate is skipped when the sandbox
-    # is down — let the run report GATE PASSED having executed nothing.
+    # Per-version, not a single AND across both. A global flag would stop grading
+    # the *healthy* version too, turn every item into `not_graded`, and — because
+    # the executable gate used to be skipped whenever that flag was false — let
+    # the run print GATE PASSED having executed nothing. Grading is per version,
+    # and so is the denominator below; a version that could not be graded is
+    # reported as such and fails the gate rather than vanishing.
     sandbox_by_version = {v: sandbox_available(v) for v in ("v1", "v2")}
-    sandbox_up = all(sandbox_by_version.values())
-    report["sandbox_available"] = sandbox_up
+    report["sandbox_available"] = all(sandbox_by_version.values())
     report["sandbox_by_version"] = sandbox_by_version
 
-    executable_hits, gradable = 0, 0
-    should_run = 0  # non-abstained answerable items: the executable_pct denominator
+    executable_hits = 0
+    gradable = 0  # answers actually executed (execution.available)
+    should_run = 0  # non-abstained answerable items whose sandbox was up
+    ungraded = 0  # non-abstained answerable items whose sandbox was NOT up
     answerable_over_abstain = 0
     answer_rows = []
     taxonomy: Counter = Counter()
-    latencies: List[float] = []
+    answer_latencies: List[float] = []
+    grade_latencies: List[float] = []
     for item in golden:
         t0 = time.perf_counter()
         res = build_answer(item.question, item.version, retriever, client=client, top_k=top_k)
-        if not res.answer.abstained and (res.answer.code or "").strip() and sandbox_by_version.get(item.version, False):
+        # Timed separately: bundling a 20s sandbox run into "answer latency"
+        # makes the published p95 a number about subprocess startup, not about
+        # the retrieval + LLM path anyone is actually asking about.
+        answer_ms = round((time.perf_counter() - t0) * 1000, 1)
+        answer_latencies.append(answer_ms)
+
+        version_up = sandbox_by_version.get(item.version, False)
+        grade_ms = None
+        if not res.answer.abstained and res.answer.has_runnable_code() and version_up:
+            t1 = time.perf_counter()
             res.execution_grade()
-        latency_ms = round((time.perf_counter() - t0) * 1000, 1)
-        latencies.append(latency_ms)
+            grade_ms = round((time.perf_counter() - t1) * 1000, 1)
+            grade_latencies.append(grade_ms)
 
         outcome = _classify_outcome(item, res)
         taxonomy[outcome] += 1
         if res.answer.abstained:
             answerable_over_abstain += 1
-        else:
+        elif version_up:
             should_run += 1
-        if res.execution is not None:
+        else:
+            ungraded += 1
+        if res.execution is not None and res.execution.available:
             gradable += 1
             if res.execution.passed:
                 executable_hits += 1
@@ -216,8 +228,10 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
             "id": item.id,
             "outcome": outcome,
             "abstained": res.answer.abstained,
-            "latency_ms": latency_ms,
+            "answer_ms": answer_ms,
         }
+        if grade_ms is not None:
+            row["grade_ms"] = grade_ms
         if res.execution is not None:
             row["executed"] = res.execution.passed
             row["reason"] = res.execution.reason
@@ -225,30 +239,48 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
 
     abstained_correct = 0
     for item in unanswerable:
+        t0 = time.perf_counter()
         res = build_answer(item.question, item.version, retriever, client=client, top_k=top_k)
+        # Timed too: leaving these out silently narrowed the published latency
+        # distribution to 25 of the 31 questions the harness actually answers.
+        answer_latencies.append(round((time.perf_counter() - t0) * 1000, 1))
         if res.answer.abstained:
             abstained_correct += 1
 
     report["answers"] = {
         # Denominator: every answerable item that *claimed* an answer (didn't
-        # abstain), not just the ones that produced code. An answer with no
-        # runnable snippet counts as a failure here — with the old
-        # graded-only denominator, a client emitting empty code for 40% of
-        # items still scored executable_pct=1.0 and passed the gate.
-        "executable_pct": (round(executable_hits / should_run, 3) if (sandbox_up and should_run) else None),
+        # abstain) and whose version's sandbox was up. An answer with no runnable
+        # snippet counts as a failure here — with the old graded-only
+        # denominator, a client emitting empty code for 40% of items still
+        # scored executable_pct=1.0 and passed the gate. Items we *couldn't*
+        # grade are excluded and counted separately in `ungraded_count`, so a
+        # half-broken sandbox never silently inflates or erases this number.
+        "executable_pct": (round(executable_hits / should_run, 3) if should_run else None),
         "answered_count": should_run,
+        "ungraded_count": ungraded,
         "gradable_count": gradable,
+        # Two related but distinct abstention numbers, spelled out because they
+        # do not have to agree: this rate counts every abstention on an
+        # answerable item, while taxonomy["over_abstention"] counts only those
+        # where retrieval *did* surface the gold chunk (an abstention despite
+        # having the evidence). An abstention that also missed its gold chunk is
+        # filed under taxonomy["retrieval_miss"], since retrieval is the
+        # upstream cause, but still counts here.
         "answerable_over_abstention": round(answerable_over_abstain / len(golden), 3) if golden else 0.0,
+        "abstained_count": answerable_over_abstain,
         "unanswerable_abstention": round(abstained_correct / len(unanswerable), 3) if unanswerable else 0.0,
         # Failure taxonomy: which stage each answerable item landed in.
         "taxonomy": dict(taxonomy),
-        "latency_ms": _latency_stats(latencies),
+        # Retrieval + LLM only, across all 31 questions.
+        "answer_latency_ms": _latency_stats(answer_latencies),
+        # Sandbox execution only, across the items that were graded.
+        "grade_latency_ms": _latency_stats(grade_latencies),
         "rows": answer_rows,
         "note": (
             "MockClient replays the answer key: executable_pct here is a PLUMBING "
             "check, not a quality claim. Run with DOCSTHATRUN_LLM=anthropic for a "
             "real measurement."
-            if type(client).__name__ == "MockClient"
+            if isinstance(client, MockClient)
             else "Measured against Claude-generated answers."
         ),
     }
@@ -274,17 +306,26 @@ def check_gate(report: dict) -> List[str]:
                 "answerable_over_abstention "
                 f"{answers['answerable_over_abstention']} > {GATE['answerable_over_abstention_max']}"
             )
-        if report.get("sandbox_available"):
-            pct = answers["executable_pct"]
-            if pct is None:
-                # Sandbox is up but every answerable item abstained. That's a
-                # regression, not a pass — the old `is not None` guard silently
-                # skipped the gate here. (Partial abstention is caught by the
-                # over-abstention gate; empty-code answers now drag pct down
-                # directly, so neither needs a separate check.)
-                failures.append("nothing to grade (every answerable item abstained) while the sandbox is up")
-            elif pct < GATE["executable_pct_min"]:
-                failures.append(f"executable_pct {pct} < {GATE['executable_pct_min']}")
+        # An execution gate that did not execute does not pass. Previously a
+        # single unavailable venv set sandbox_available=False, which skipped
+        # this whole block — so a run that graded half the corpus (and threw
+        # those results away) printed GATE PASSED. Any version we could not
+        # grade is now a stated failure, naming the version.
+        down = [v for v, up in sorted(report.get("sandbox_by_version", {}).items()) if not up]
+        if down:
+            failures.append(
+                f"sandbox unavailable for {', '.join(down)} — "
+                f"{answers['ungraded_count']} answerable item(s) went ungraded; "
+                "run scripts/setup_sandbox.sh"
+            )
+        pct = answers["executable_pct"]
+        if pct is None:
+            # Nothing was gradable: either every answerable item abstained, or
+            # no sandbox was up at all. Both are regressions, not passes — the
+            # old guard silently skipped the gate in each case.
+            failures.append("executable_pct could not be measured (nothing was graded)")
+        elif pct < GATE["executable_pct_min"]:
+            failures.append(f"executable_pct {pct} < {GATE['executable_pct_min']}")
     return failures
 
 
@@ -296,8 +337,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--top-k",
         type=int,
         default=5,
-        help="retrieval depth, 1-50 (default 5). Metrics are computed at this "
-        "depth, so compare runs at the same value.",
+        help="retrieval depth, 1-50 (default 5). recall@3 and recall@5 are fixed "
+        "at those depths regardless; this changes MRR and how much context the "
+        "answer layer sees, so compare runs at the same value.",
     )
     parser.add_argument("--client", default=None, choices=CLIENT_NAMES, help="anthropic | mock | auto")
     parser.add_argument("--json", default=None, help="write full report to this path")
@@ -317,18 +359,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"retrieval: recall@3={ret['recall_at_3']}  recall@5={ret['recall_at_5']}  mrr={ret['mrr']}")
     if report.get("answers"):
         a = report["answers"]
-        print(f"client={report['client']}  sandbox={report['sandbox_available']}")
+        by_version = "  ".join(
+            f"{v}={'up' if up else 'DOWN'}" for v, up in sorted(report["sandbox_by_version"].items())
+        )
+        print(f"client={report['client']}  sandbox: {by_version}")
         print(
-            f"answers: executable%={a['executable_pct']} (n={a['answered_count']} answered)  "
+            f"answers: executable%={a['executable_pct']} (n={a['answered_count']} graded)  "
             f"unanswerable_abstention={a['unanswerable_abstention']}  "
             f"answerable_over_abstention={a['answerable_over_abstention']}"
         )
+        if a["ungraded_count"]:
+            # Never let ungraded items disappear into a percentage.
+            print(f"WARNING: {a['ungraded_count']} answerable item(s) went ungraded (sandbox down for their version)")
         if a.get("taxonomy"):
             tax = "  ".join(f"{k}={v}" for k, v in sorted(a["taxonomy"].items()))
             print(f"taxonomy: {tax}")
-        if a.get("latency_ms"):
-            lt = a["latency_ms"]
-            print(f"latency(ms): mean={lt['mean']}  p50={lt['p50']}  p95={lt['p95']}  max={lt['max']}")
+        for label, key in (("answer", "answer_latency_ms"), ("grade", "grade_latency_ms")):
+            lt = a.get(key)
+            if lt:
+                print(f"{label} latency(ms): mean={lt['mean']}  p50={lt['p50']}  p95={lt['p95']}  max={lt['max']}")
         print(f"note: {a['note']}")
 
     if args.json:
