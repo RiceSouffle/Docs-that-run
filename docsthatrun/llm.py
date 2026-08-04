@@ -15,11 +15,11 @@ otherwise Mock. Override explicitly with ``DOCSTHATRUN_LLM=anthropic|mock``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Dict, List, Optional
 
 from .config import settings
-from .corpus import tokenize  # noqa: F401  (kept for parity / future use)
 from .schema import Chunk, RetrievalResult
 
 # Central config is the source of truth (env-driven); see docsthatrun.config.
@@ -57,12 +57,17 @@ SYSTEM_PROMPT = (
 )
 
 
-_ABSTAIN: Dict[str, object] = {
-    "answer": "I couldn't produce a grounded answer from the retrieved docs.",
-    "code": "",
-    "citations": [],
-    "abstained": True,
-}
+_ABSTAIN_TEXT = "I couldn't produce a grounded answer from the retrieved docs."
+
+
+def _abstain(answer: str = _ABSTAIN_TEXT) -> Dict[str, object]:
+    """A fresh abstain response.
+
+    Built per call rather than copied from a module constant: ``dict(CONST, ...)``
+    is shallow, so every caller got the *same* ``citations`` list object and one
+    of them mutating it would corrupt the constant for the life of the process.
+    """
+    return {"answer": answer, "code": "", "citations": [], "abstained": True}
 
 
 def _extract_json(text: str) -> Optional[Dict[str, object]]:
@@ -153,9 +158,11 @@ class AnthropicClient(LLMClient):
         )
         stop = getattr(resp, "stop_reason", None)
         if stop == "refusal":
-            return dict(_ABSTAIN, answer="The request was declined.")
+            return _abstain("The request was declined.")
+        # `or ()` because every other malformed-response shape degrades to an
+        # abstain below; a null content block should not be the one that raises.
         text = next(
-            (b.text for b in resp.content if getattr(b, "type", None) == "text"),
+            (b.text for b in (resp.content or ()) if getattr(b, "type", None) == "text"),
             "",
         )
         parsed = _extract_json(text)
@@ -163,10 +170,7 @@ class AnthropicClient(LLMClient):
             # Truncated (max_tokens while thinking), empty, or malformed output:
             # abstain rather than crash the caller. `stop` is surfaced for
             # observability so a spike in truncations is visible in logs.
-            return dict(
-                _ABSTAIN,
-                answer=("I couldn't produce a grounded answer" + (f" (model stopped: {stop})." if stop else ".")),
-            )
+            return _abstain("I couldn't produce a grounded answer" + (f" (model stopped: {stop})." if stop else "."))
         return parsed
 
 
@@ -178,18 +182,20 @@ class MockClient(LLMClient):
     """
 
     def __init__(self, fixtures: Optional[Dict[str, Dict[str, object]]] = None):
-        self.fixtures = fixtures or _load_fixtures_from_golden()
+        # `is None`, not falsy: MockClient({}) means "no fixtures, abstain on
+        # everything", and `fixtures or ...` silently loaded the whole golden
+        # set instead — turning a deliberately empty client into the answer key.
+        self.fixtures = _load_fixtures_from_golden() if fixtures is None else fixtures
 
     def generate(self, question: str, version: str, retrieved: List[RetrievalResult]) -> Dict[str, object]:
         fixture = self.fixtures.get(_norm(question))
         if fixture is None:
-            return {
-                "answer": "I don't have documentation that covers this.",
-                "code": "",
-                "citations": [],
-                "abstained": True,
-            }
-        return dict(fixture)
+            return _abstain("I don't have documentation that covers this.")
+        # Deep-ish copy: dict() alone would hand the caller the fixture's own
+        # citations list, so a caller mutating it would rewrite the answer key.
+        copy = dict(fixture)
+        copy["citations"] = list(fixture.get("citations") or [])
+        return copy
 
 
 def _norm(text: str) -> str:
@@ -262,6 +268,15 @@ def get_client(name: Optional[str] = None) -> LLMClient:
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
             return AnthropicClient()
-        except Exception:  # pragma: no cover - fall back if SDK missing
-            pass
+        except ImportError:
+            # The one downgrade that is genuinely benign: a key is set but the
+            # optional SDK isn't installed. Narrow on purpose — a blanket
+            # `except Exception` also swallowed bad-credential and client-config
+            # errors, so a run that looked like a real measurement was quietly
+            # grading the answer key. That is the single mislabelling this
+            # project cannot afford, so everything else propagates.
+            logging.getLogger(__name__).warning(
+                "ANTHROPIC_API_KEY is set but the `anthropic` package is not installed; "
+                "falling back to the offline MockClient. Install it with: pip install 'docsthatrun[llm]'"
+            )
     return MockClient()

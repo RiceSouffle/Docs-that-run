@@ -29,7 +29,7 @@ from ..corpus import load_corpus
 from ..llm import CLIENT_NAMES, MockClient, get_client
 from ..retrieve import HybridRetriever
 from ..sandbox import sandbox_available
-from ..schema import GoldenItem
+from ..schema import VERSIONS, GoldenItem
 from .metrics import mean, recall_at_k, reciprocal_rank
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
@@ -181,7 +181,7 @@ def evaluate(run_answers: bool = False, top_k: int = 5, client_name: Optional[st
     # the run print GATE PASSED having executed nothing. Grading is per version,
     # and so is the denominator below; a version that could not be graded is
     # reported as such and fails the gate rather than vanishing.
-    sandbox_by_version = {v: sandbox_available(v) for v in ("v1", "v2")}
+    sandbox_by_version = {v: sandbox_available(v) for v in VERSIONS}
     report["sandbox_available"] = all(sandbox_by_version.values())
     report["sandbox_by_version"] = sandbox_by_version
 

@@ -18,7 +18,7 @@ from collections import Counter, defaultdict
 from typing import Dict, List
 
 from .corpus import tokenize
-from .schema import Chunk, RetrievalResult
+from .schema import VERSIONS, Chunk, RetrievalResult
 
 BM25_K1 = 1.5
 BM25_B = 0.75
@@ -112,8 +112,16 @@ class HybridRetriever:
         return {cid: rank for rank, (cid, _) in enumerate(ordered, start=1)}
 
     def retrieve(self, question: str, version: str, top_k: int = 5) -> List[RetrievalResult]:
-        if version not in ("v1", "v2"):
+        if version not in VERSIONS:
             raise ValueError(f"version must be 'v1' or 'v2', got {version!r}")
+        # Validated here, not only in the three callers that happened to bound
+        # it. top_k=0 retrieves nothing — an answer built from no documentation
+        # at all — and a negative value slices via ordered[:-k], silently
+        # dropping the lowest-ranked chunks. Both produce a confidently wrong
+        # answer with no error anywhere, and build_answer passed the value
+        # straight through from any caller that skipped its own check.
+        if top_k < 1:
+            raise ValueError(f"top_k must be >= 1, got {top_k!r}")
         q_tokens = tokenize(question)
         candidates = self._candidates(version)
 

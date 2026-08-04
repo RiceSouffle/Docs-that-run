@@ -24,14 +24,12 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from .config import settings
+from .schema import VERSIONS
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _VENV_DIR = os.path.join(_REPO_ROOT, ".venvs")
 
-VENV_PYTHON = {
-    "v1": os.path.join(_VENV_DIR, "pydantic_v1", "bin", "python"),
-    "v2": os.path.join(_VENV_DIR, "pydantic_v2", "bin", "python"),
-}
+VENV_PYTHON = {v: os.path.join(_VENV_DIR, f"pydantic_{v}", "bin", "python") for v in VERSIONS}
 
 # What each sandbox must be able to import to be considered usable. v2 also needs
 # pydantic_settings: v2 split settings into its own distribution, and golden item

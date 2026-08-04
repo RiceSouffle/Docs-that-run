@@ -12,6 +12,8 @@ import os
 from dataclasses import dataclass
 from typing import Tuple
 
+from .schema import VERSIONS  # pure dataclasses + constants; no import cycle
+
 
 def _int(name: str, default: int) -> int:
     try:
@@ -98,23 +100,44 @@ class Settings:
         # max_length=...) on the request model. A value of 0 or negative makes
         # max_length < min_length, so *every* question is rejected as too long.
         max_question_chars = _clamp(_int("DOCSTHATRUN_MAX_QUESTION_CHARS", cls.max_question_chars), 1, 1_000_000)
+        # The sandbox limits need the same treatment, and used to have none —
+        # despite being the knobs where a bad value fails *silently and
+        # uniformly*. DOCSTHATRUN_SANDBOX_TIMEOUT=0 makes proc.wait(timeout=0)
+        # expire instantly, so every snippet in the corpus reports "timed out"
+        # and executable-% collapses to 0 with nothing in the report explaining
+        # why. A negative CPU/FSIZE/AS limit is worse: setrlimit raises inside
+        # the launcher's best-effort try/except, so the limit vanishes and the
+        # sandbox silently stops containing anything.
+        sandbox_timeout_s = _clamp(_int("DOCSTHATRUN_SANDBOX_TIMEOUT", cls.sandbox_timeout_s), 1, 3600)
+        sandbox_cpu_seconds = _clamp(_int("DOCSTHATRUN_SANDBOX_CPU", cls.sandbox_cpu_seconds), 1, 3600)
+        sandbox_memory_mb = _clamp(_int("DOCSTHATRUN_SANDBOX_MEM_MB", cls.sandbox_memory_mb), 64, 1 << 20)
+        sandbox_file_mb = _clamp(_int("DOCSTHATRUN_SANDBOX_FILE_MB", cls.sandbox_file_mb), 1, 1 << 20)
+        # A bad version here is not a clamp but a rejection: it feeds
+        # AskRequest.version's default, so DOCSTHATRUN_DEFAULT_VERSION=v3 turns
+        # every /ask that omits `version` into a 400 — a config typo presenting
+        # as a client error, on every request, with nothing pointing at the env.
+        default_version = os.environ.get("DOCSTHATRUN_DEFAULT_VERSION", cls.default_version).strip()
+        if default_version not in VERSIONS:
+            raise ValueError(f"DOCSTHATRUN_DEFAULT_VERSION={default_version!r} is not one of {', '.join(VERSIONS)}")
         return cls(
             model=os.environ.get("DOCSTHATRUN_MODEL", cls.model),
             effort=os.environ.get("DOCSTHATRUN_EFFORT", cls.effort),
-            llm_timeout_s=_float("DOCSTHATRUN_LLM_TIMEOUT", cls.llm_timeout_s),
-            llm_max_retries=_int("DOCSTHATRUN_LLM_RETRIES", cls.llm_max_retries),
-            default_version=os.environ.get("DOCSTHATRUN_DEFAULT_VERSION", cls.default_version),
+            llm_timeout_s=max(1.0, _float("DOCSTHATRUN_LLM_TIMEOUT", cls.llm_timeout_s)),
+            llm_max_retries=_clamp(_int("DOCSTHATRUN_LLM_RETRIES", cls.llm_max_retries), 0, 10),
+            default_version=default_version,
             top_k_default=top_k_default,
             top_k_max=top_k_max,
             max_question_chars=max_question_chars,
-            sandbox_timeout_s=_int("DOCSTHATRUN_SANDBOX_TIMEOUT", cls.sandbox_timeout_s),
-            sandbox_cpu_seconds=_int("DOCSTHATRUN_SANDBOX_CPU", cls.sandbox_cpu_seconds),
-            sandbox_memory_mb=_int("DOCSTHATRUN_SANDBOX_MEM_MB", cls.sandbox_memory_mb),
-            sandbox_file_mb=_int("DOCSTHATRUN_SANDBOX_FILE_MB", cls.sandbox_file_mb),
-            cache_max=_int("DOCSTHATRUN_CACHE_MAX", cls.cache_max),
-            cache_ttl_s=_float("DOCSTHATRUN_CACHE_TTL", cls.cache_ttl_s),
-            rate_limit_rpm=_int("DOCSTHATRUN_RATE_RPM", cls.rate_limit_rpm),
-            rate_limit_burst=_int("DOCSTHATRUN_RATE_BURST", cls.rate_limit_burst),
+            sandbox_timeout_s=sandbox_timeout_s,
+            sandbox_cpu_seconds=sandbox_cpu_seconds,
+            sandbox_memory_mb=sandbox_memory_mb,
+            sandbox_file_mb=sandbox_file_mb,
+            # 0 disables each of these; negatives mean the same thing, not
+            # "unbounded" (a negative TTL used to make entries immortal).
+            cache_max=max(0, _int("DOCSTHATRUN_CACHE_MAX", cls.cache_max)),
+            cache_ttl_s=max(0.0, _float("DOCSTHATRUN_CACHE_TTL", cls.cache_ttl_s)),
+            rate_limit_rpm=max(0, _int("DOCSTHATRUN_RATE_RPM", cls.rate_limit_rpm)),
+            rate_limit_burst=max(1, _int("DOCSTHATRUN_RATE_BURST", cls.rate_limit_burst)),
             trust_proxy=_bool("DOCSTHATRUN_TRUST_PROXY", cls.trust_proxy),
             cors_origins=_csv("DOCSTHATRUN_CORS_ORIGINS", cls.cors_origins),
             log_level=os.environ.get("DOCSTHATRUN_LOG_LEVEL", cls.log_level).upper(),

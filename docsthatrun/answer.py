@@ -19,6 +19,19 @@ def build_answer(
 ) -> "AnswerResult":
     client = client or get_client()
     retrieved = retriever.retrieve(question, version, top_k=top_k)
+    if not retrieved:
+        # Nothing was retrieved, so there is no documentation to ground an
+        # answer in and abstaining is the only correct outcome. Calling the
+        # model anyway would be a billed round-trip that can only hallucinate or
+        # abstain — and the prompt would contain an empty DOCUMENTATION CHUNKS
+        # section, which is not a question worth asking.
+        answer = Answer(
+            answer="I don't have documentation that covers this.",
+            code="",
+            citations=[],
+            abstained=True,
+        )
+        return AnswerResult(question=question, version=version, retrieved=[], answer=answer)
     raw = client.generate(question, version, retrieved)
     answer = _coerce(raw, retrieved)
     return AnswerResult(question=question, version=version, retrieved=retrieved, answer=answer)
@@ -27,7 +40,14 @@ def build_answer(
 def _coerce(raw: dict, retrieved: List[RetrievalResult]) -> Answer:
     retrieved_ids = {r.chunk.id for r in retrieved}
     # Drop hallucinated citations: only keep ids that were actually retrieved.
-    citations = [c for c in raw.get("citations", []) if c in retrieved_ids]
+    # `raw` is not schema-guaranteed — _extract_json's salvage path can return
+    # any dict shape — so a `"citations": null` used to reach this line and
+    # raise TypeError straight out of the request. Anything that isn't a list of
+    # strings is treated as "no citations".
+    raw_citations = raw.get("citations")
+    if not isinstance(raw_citations, (list, tuple)):
+        raw_citations = []
+    citations = [c for c in raw_citations if isinstance(c, str) and c in retrieved_ids]
     return Answer(
         answer=str(raw.get("answer", "")),
         code=str(raw.get("code", "")),

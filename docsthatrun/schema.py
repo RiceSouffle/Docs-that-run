@@ -8,8 +8,11 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 # The two library versions this project reasons about. "both" means a doc chunk
-# applies regardless of version and is never filtered out.
+# applies regardless of version and is never filtered out. Single source of
+# truth: these used to be re-spelled as literals in corpus, retrieve, sandbox
+# and the eval harness, so adding a version meant finding all five.
 VERSIONS = ("v1", "v2")
+CHUNK_VERSIONS = VERSIONS + ("both",)
 
 
 @dataclass(frozen=True)

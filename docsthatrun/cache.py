@@ -25,7 +25,12 @@ class TTLCache:
 
     @property
     def enabled(self) -> bool:
-        return self._maxsize > 0
+        # A non-positive TTL disables the cache rather than meaning "forever".
+        # It used to map to float("inf"), so DOCSTHATRUN_CACHE_TTL=0 — the
+        # obvious way to write "don't cache", and symmetric with CACHE_MAX=0 —
+        # made every entry immortal instead: the exact opposite of the request,
+        # and a way to serve a stale answer indefinitely.
+        return self._maxsize > 0 and self._ttl > 0
 
     def get(self, key: Hashable) -> Optional[Any]:
         """Return the cached value, or ``None`` on miss/expiry.
@@ -53,7 +58,7 @@ class TTLCache:
     def set(self, key: Hashable, value: Any) -> None:
         if not self.enabled:
             return
-        expiry = time.monotonic() + self._ttl if self._ttl > 0 else float("inf")
+        expiry = time.monotonic() + self._ttl
         with self._lock:
             self._data[key] = (expiry, value)
             self._data.move_to_end(key)
@@ -61,8 +66,16 @@ class TTLCache:
                 self._data.popitem(last=False)
 
     def clear(self) -> None:
+        """Drop every entry *and* the counters.
+
+        Leaving hits/misses behind meant stats() reported a hit_rate computed
+        over requests whose entries no longer exist — a number about a cache
+        that isn't there any more.
+        """
         with self._lock:
             self._data.clear()
+            self.hits = 0
+            self.misses = 0
 
     def stats(self) -> dict:
         with self._lock:

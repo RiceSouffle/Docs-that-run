@@ -20,6 +20,7 @@ POST /compare         {"question"} -> answers for BOTH versions (the version-loc
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import threading
@@ -248,6 +249,9 @@ class MetaOut(BaseModel):
     latency_ms: float
     cached: bool
     client: str
+    # Only present on a cache hit: what the answer cost the first time it was
+    # computed. `latency_ms` always describes *this* response.
+    uncached_latency_ms: Optional[float] = None
 
 
 class AskResponse(BaseModel):
@@ -284,13 +288,24 @@ def _answer(question: str, version: str, execute: bool, top_k: int) -> dict:
     # question that caller never sent.
     question = question.strip()
     key = (question, version, top_k, execute)
+    t0 = time.perf_counter()
     hit = answer_cache.get(key)
     if hit is not None:
-        out = dict(hit)
-        out["meta"] = {**hit["meta"], "cached": True}
+        # deepcopy, not dict(): a shallow copy shares the cached `answer`,
+        # `retrieved` and `execution` sub-dicts with every future hit, so one
+        # caller mutating a response would rewrite what everyone else gets.
+        out = copy.deepcopy(hit)
+        out["meta"] = {
+            **hit["meta"],
+            "cached": True,
+            # What this serve actually cost, which is the whole point of saying
+            # "cached". Reporting the original 300ms next to the word made the
+            # UI read "295.7 ms · cached" for a sub-millisecond response.
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "uncached_latency_ms": hit["meta"]["latency_ms"],
+        }
         return out
 
-    t0 = time.perf_counter()
     result: AnswerResult = build_answer(question, version, get_retriever(), client=get_llm(), top_k=top_k)
     if execute and result.answer.has_runnable_code() and not result.answer.abstained and sandbox_available(version):
         result.execution_grade()

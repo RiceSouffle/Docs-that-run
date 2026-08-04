@@ -13,7 +13,7 @@ import os
 import re
 from typing import List
 
-from .schema import Chunk
+from .schema import CHUNK_VERSIONS, Chunk
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
 
@@ -68,5 +68,5 @@ def _validate(chunks: List[Chunk], path: str) -> None:
         if chunk.id in seen:
             raise ValueError(f"{path}: duplicate chunk id {chunk.id!r}")
         seen.add(chunk.id)
-        if chunk.version not in ("v1", "v2", "both"):
+        if chunk.version not in CHUNK_VERSIONS:
             raise ValueError(f"{path}: chunk {chunk.id!r} has bad version {chunk.version!r}")
