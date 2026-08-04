@@ -25,6 +25,7 @@ from .schema import Chunk, RetrievalResult
 # Central config is the source of truth (env-driven); see docsthatrun.config.
 DEFAULT_MODEL = settings.model
 DEFAULT_EFFORT = settings.effort
+DEFAULT_MAX_TOKENS = settings.max_tokens
 
 ANSWER_SCHEMA = {
     "type": "object",
@@ -125,7 +126,12 @@ class LLMClient:
 
 
 class AnthropicClient(LLMClient):
-    def __init__(self, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT):
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        effort: str = DEFAULT_EFFORT,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ):
         import anthropic  # imported lazily so the core has no hard dependency
 
         self._anthropic = anthropic
@@ -138,6 +144,7 @@ class AnthropicClient(LLMClient):
         )
         self.model = model
         self.effort = effort
+        self.max_tokens = max_tokens
 
     def generate(self, question: str, version: str, retrieved: List[RetrievalResult]) -> Dict[str, object]:
         chunks = [r.chunk for r in retrieved]
@@ -145,9 +152,8 @@ class AnthropicClient(LLMClient):
         resp = self.client.messages.create(
             model=self.model,
             # Headroom for adaptive thinking *and* the JSON answer — they share
-            # this budget. Too small a cap truncates mid-JSON (stop_reason
-            # "max_tokens"); the answers themselves are short so this is ample.
-            max_tokens=4096,
+            # this budget (see config.max_tokens).
+            max_tokens=self.max_tokens,
             thinking={"type": "adaptive"},
             output_config={
                 "effort": self.effort,

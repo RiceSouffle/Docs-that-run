@@ -21,19 +21,21 @@ POST /compare         {"question"} -> answers for BOTH versions (the version-loc
 from __future__ import annotations
 
 import copy
+import functools
 import logging
 import os
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional
+from typing import Annotated, Dict, List, Optional
 
 try:
-    from fastapi import FastAPI, HTTPException, Request, Response
+    from fastapi import Depends, FastAPI, HTTPException, Request, Response
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     from fastapi.staticfiles import StaticFiles
-    from pydantic import BaseModel, Field
+    from pydantic import AfterValidator, BaseModel, Field
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("The API server needs fastapi + uvicorn: pip install -r requirements.txt") from exc
 
@@ -83,21 +85,29 @@ def get_llm():
     return _client
 
 
+def _warm() -> dict:
+    """Everything blocking that startup wants done up front.
+
+    Runs in a worker thread, not on the event loop: `sandbox_available` forks a
+    probe subprocess per version with a 15s timeout, so doing this inline in an
+    async lifespan could wedge the loop for half a minute before the server
+    accepted its first connection.
+    """
+    get_retriever()
+    client = get_llm()
+    return {
+        "client": type(client).__name__,
+        "sandbox": {v: sandbox_available(v) for v in VERSIONS},
+        "cache_max": settings.cache_max,
+        "rate_rpm": settings.rate_limit_rpm,
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: "FastAPI"):
     # Warm the retriever + client at startup so the first request isn't slow and
     # any config/corpus error surfaces on boot, not mid-request.
-    get_retriever()
-    client = get_llm()
-    log.info(
-        "startup",
-        extra={
-            "client": type(client).__name__,
-            "sandbox": {v: sandbox_available(v) for v in VERSIONS},
-            "cache_max": settings.cache_max,
-            "rate_rpm": settings.rate_limit_rpm,
-        },
-    )
+    log.info("startup", extra=await run_in_threadpool(_warm))
     yield
 
 
@@ -205,15 +215,36 @@ if settings.cors_origins:  # opt-in; same-origin UI needs none
 # ---- request / response models --------------------------------------------
 
 
+def _validated_question(value: str) -> str:
+    """Strip, then enforce min_length — in that order.
+
+    `Field(min_length=1)` runs against the raw body, and the handler strips
+    afterwards, so a question of "   " passed validation and then became "".
+    The pipeline answered an empty question: 200 OK, an echoed empty string,
+    and (with a real client) a billed call built from no question at all.
+    """
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("question must not be blank")
+    return stripped
+
+
+Question = Annotated[
+    str,
+    Field(min_length=1, max_length=settings.max_question_chars),
+    AfterValidator(_validated_question),
+]
+
+
 class AskRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=settings.max_question_chars)
+    question: Question
     version: str = settings.default_version
     execute: bool = True
     top_k: int = Field(settings.top_k_default, ge=1, le=settings.top_k_max)
 
 
 class CompareRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=settings.max_question_chars)
+    question: Question
     execute: bool = True
     top_k: int = Field(settings.top_k_default, ge=1, le=settings.top_k_max)
 
@@ -371,23 +402,46 @@ def _sandbox_status_cached() -> Dict[str, bool]:
 
 @app.get("/health")
 def health() -> dict:
+    # Liveness must not depend on anything that can fail: get_client() raises on
+    # an unknown DOCSTHATRUN_LLM, which used to 500 the endpoint an orchestrator
+    # uses to decide whether the process is alive — restarting a healthy server
+    # over a config typo.
+    try:
+        client = type(get_llm()).__name__
+    except Exception:
+        log.exception("health_client_unavailable")
+        client = "unavailable"
     return {
         "status": "ok",
         "version": APP_VERSION,
-        "client": type(get_llm()).__name__,
+        "client": client,
         "sandbox": _sandbox_status_cached(),
     }
 
 
 @app.get("/ready")
 def ready(response: Response) -> dict:
-    corpus_ok = len(get_retriever().chunks) > 0
+    # A malformed corpus raises out of load_corpus(). Returning 503 is this
+    # endpoint's entire job; letting it 500 instead told the probe "the server
+    # is broken in an unknown way" when the server knew exactly what was wrong.
+    try:
+        corpus_ok = len(get_retriever().chunks) > 0
+        detail = None
+    except Exception as exc:
+        log.exception("ready_corpus_unavailable")
+        corpus_ok = False
+        detail = f"{type(exc).__name__}: {exc}"
     sandbox = _sandbox_status_cached()
     if not corpus_ok:
         # Probes (k8s readinessProbe, LB health checks) act on the status code,
         # not the body — "ready": false inside a 200 would still get traffic.
         response.status_code = 503
-    return {"ready": corpus_ok, "corpus": corpus_ok, "sandbox": sandbox}
+    out = {"ready": corpus_ok, "corpus": corpus_ok, "sandbox": sandbox}
+    if detail:
+        # Safe to surface here: it is our own corpus-validation message, not
+        # upstream exception text, and it is what an operator needs to see.
+        out["detail"] = detail
+    return out
 
 
 @app.get("/metrics", response_class=PlainTextResponse)
@@ -400,13 +454,30 @@ def stats() -> dict:
     return metrics.snapshot(answer_cache.stats())
 
 
-@app.get("/examples")
-def examples() -> dict:
+@functools.lru_cache(maxsize=1)
+def _examples_payload() -> dict:
+    """Sample questions for the UI, read once.
+
+    The data files are committed and never change at runtime, so re-reading and
+    re-parsing both JSONL files on every request was pure waste — and left an
+    unhandled FileNotFoundError/JSONDecodeError on a public GET.
+    """
     from docsthatrun.evals.run_evals import load_golden, load_unanswerable
 
     answerable = [{"question": i.question, "version": i.version, "answerable": True} for i in load_golden()]
     unanswerable = [{"question": i.question, "version": i.version, "answerable": False} for i in load_unanswerable()]
     return {"answerable": answerable, "unanswerable": unanswerable}
+
+
+@app.get("/examples")
+def examples() -> dict:
+    try:
+        return _examples_payload()
+    except Exception:
+        # The UI treats an empty list as "no probes to show" and stays usable;
+        # a 500 here would make the whole demo page look broken.
+        log.exception("examples_unavailable")
+        return {"answerable": [], "unanswerable": []}
 
 
 def _client_key(request: Request) -> str:
@@ -422,7 +493,29 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "anon"
 
 
+def _upstream_failure(event: str, request: Request) -> HTTPException:
+    """Log the real cause, return a 502 that says nothing about it.
+
+    The exception text used to be interpolated into the client-visible `detail`
+    and rendered verbatim by the UI. SDK errors carry request URLs, headers and
+    account identifiers, so that turned an upstream hiccup into an information
+    leak. The request id is the handle for correlating the two.
+    """
+    rid = getattr(request.state, "request_id", None)
+    log.exception(event, extra={"request_id": rid})
+    return HTTPException(
+        status_code=502,
+        detail="answer generation failed" + (f" (request id {rid})" if rid else ""),
+    )
+
+
 def _rate_limit(request: Request) -> None:
+    """Spend one token, or 429.
+
+    Wired as a route *dependency* rather than the first line of each handler:
+    dependencies run before body validation, so a flood of malformed bodies
+    (which 422 before a handler is ever entered) is now metered too.
+    """
     ok, retry = limiter.allow(_client_key(request))
     if not ok:
         raise HTTPException(
@@ -432,9 +525,8 @@ def _rate_limit(request: Request) -> None:
         )
 
 
-@app.post("/ask", response_model=AskResponse)
+@app.post("/ask", response_model=AskResponse, dependencies=[Depends(_rate_limit)])
 def ask(req: AskRequest, request: Request) -> dict:
-    _rate_limit(request)
     if req.version not in VERSIONS:
         raise HTTPException(status_code=400, detail="version must be 'v1' or 'v2'")
     try:
@@ -442,19 +534,22 @@ def ask(req: AskRequest, request: Request) -> dict:
     except HTTPException:
         raise
     except Exception as exc:  # upstream LLM / parse failure -> clean 502
-        log.exception("ask_failed", extra={"request_id": getattr(request.state, "request_id", None)})
-        raise HTTPException(status_code=502, detail=f"answer generation failed: {exc}") from exc
+        raise _upstream_failure("ask_failed", request) from exc
 
 
-@app.post("/compare", response_model=CompareResponse)
+@app.post("/compare", response_model=CompareResponse, dependencies=[Depends(_rate_limit)])
 def compare(req: CompareRequest, request: Request) -> dict:
-    """Answer the same question for BOTH versions — the version-lock showcase."""
-    _rate_limit(request)
+    """Answer the same question for BOTH versions — the version-lock showcase.
+
+    Costs two tokens, not one: this runs the whole answer + grade path twice, so
+    charging it as a single request let a caller do double the work per unit of
+    limit.
+    """
+    _rate_limit(request)  # second token, for the second version
     try:
         versions = {v: _answer(req.question, v, req.execute, req.top_k) for v in VERSIONS}
     except HTTPException:
         raise
     except Exception as exc:
-        log.exception("compare_failed", extra={"request_id": getattr(request.state, "request_id", None)})
-        raise HTTPException(status_code=502, detail=f"answer generation failed: {exc}") from exc
+        raise _upstream_failure("compare_failed", request) from exc
     return {"question": req.question, "versions": versions}

@@ -16,7 +16,15 @@ import time
 from collections import Counter, defaultdict
 from typing import Dict, Optional
 
-_RESERVED = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {"message", "asctime", "taskName"}
+# Keys an `extra={...}` must not be allowed to occupy. Two groups: LogRecord's
+# own attributes (which stdlib already refuses to let `extra` shadow), and — the
+# part that was missing — the four keys this formatter writes itself. Without
+# them, `logger.info(..., extra={"level": "DEBUG"})` overwrote the real level in
+# the emitted JSON, so a log line could lie about its own severity.
+_OWN_FIELDS = {"ts", "level", "logger", "msg", "exc"}
+_RESERVED = (
+    set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {"message", "asctime", "taskName"} | _OWN_FIELDS
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -101,9 +109,14 @@ class Metrics:
             lines.append("# TYPE docsthatrun_requests_total counter")
             for (endpoint, status), n in sorted(self.requests.items()):
                 lines.append(f'docsthatrun_requests_total{{endpoint="{_esc(endpoint)}",status="{status}"}} {n}')
+            # Both series get their own TYPE line. _count previously inherited
+            # the _sum header, which is a different metric name, so a scraper
+            # saw it as untyped.
             lines.append("# TYPE docsthatrun_request_latency_ms_sum counter")
             for endpoint, s in sorted(self.latency_sum.items()):
                 lines.append(f'docsthatrun_request_latency_ms_sum{{endpoint="{_esc(endpoint)}"}} {round(s, 2)}')
+            lines.append("# TYPE docsthatrun_request_latency_ms_count counter")
+            for endpoint in sorted(self.latency_count):
                 lines.append(
                     f'docsthatrun_request_latency_ms_count{{endpoint="{_esc(endpoint)}"}} '
                     f"{self.latency_count[endpoint]}"
@@ -114,6 +127,7 @@ class Metrics:
         if cache_stats:
             lines.append("# TYPE docsthatrun_cache_hits_total counter")
             lines.append(f"docsthatrun_cache_hits_total {cache_stats.get('hits', 0)}")
+            lines.append("# TYPE docsthatrun_cache_misses_total counter")
             lines.append(f"docsthatrun_cache_misses_total {cache_stats.get('misses', 0)}")
             lines.append("# TYPE docsthatrun_cache_size gauge")
             lines.append(f"docsthatrun_cache_size {cache_stats.get('size', 0)}")

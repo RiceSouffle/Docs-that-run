@@ -306,6 +306,10 @@
   // ---- python highlighter (cosmetic) ----
   const KW = new Set("from import class def return assert if else elif for while in is not and or None True False with as pass raise try except lambda yield".split(" "));
   const BI = new Set("print int str float bool list dict set tuple len range property".split(" "));
+  // Element-content escaping ONLY — quotes are deliberately not escaped, so this
+  // is not safe for building an attribute value. Every current use is either
+  // textContent or innerHTML in element position; keep it that way, or add
+  // quote escaping first.
   const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   function highlight(code) {
     return code.split("\n").map(line => {
@@ -402,7 +406,17 @@
       // shows a bare FAIL with nothing explaining why.
       if (!ex.passed && ex.reason && ex.reason !== "non-zero exit") rows.push(["reason", ex.reason]);
     }
-    if (data.meta && data.meta.latency_ms != null) rows.push(["time", data.meta.latency_ms + " ms" + (data.meta.cached ? "  ·  cached" : "")]);
+    if (data.meta && data.meta.latency_ms != null) {
+      // latency_ms is what THIS response cost. On a cache hit that's a fraction
+      // of a millisecond, so show the original cost alongside it rather than
+      // printing the uncached figure next to the word "cached".
+      let t = data.meta.latency_ms + " ms";
+      if (data.meta.cached) {
+        t += "  ·  cached";
+        if (data.meta.uncached_latency_ms != null) t += " (" + data.meta.uncached_latency_ms + " ms uncached)";
+      }
+      rows.push(["time", t]);
+    }
     const wrap = el("div", "verdict " + kind);
     const g = el("div", "glyph");
     g.appendChild(el("div", "mark", mark)); g.appendChild(el("div", "word", word));

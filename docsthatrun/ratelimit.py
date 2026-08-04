@@ -40,7 +40,9 @@ class RateLimiter:
                 tokens -= 1.0
             else:
                 allowed = False
-                retry = round((1.0 - tokens) / self._rate, 2) if self._rate > 0 else 60.0
+                # _rate is always > 0 here: _enabled requires rpm > 0, and the
+                # guard above returns early otherwise.
+                retry = round((1.0 - tokens) / self._rate, 2)
             self._buckets[key] = (tokens, now)
             self._buckets.move_to_end(key)  # mark most-recently-seen
             if len(self._buckets) > self._max_keys:

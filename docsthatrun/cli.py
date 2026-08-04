@@ -101,11 +101,18 @@ def _render(result: AnswerResult, c: _C, show_retrieval: bool = True) -> None:
         print()
         for line in a.code.rstrip().splitlines():
             print("    " + c.dim("│ ") + line)
-    if ex is not None and ex.available and not ex.passed and ex.stderr:
-        print()
-        print("  " + c.dim("stderr:"))
-        for line in ex.stderr.strip().splitlines()[-6:]:
-            print("    " + c.red(line))
+    if ex is not None and ex.available and not ex.passed:
+        # Print the reason, not just stderr. A snippet stopped by the CPU limit
+        # or the wall clock is SIGKILLed, so it leaves *no* stderr at all — the
+        # exact case _exit_reason() was written for, and the exact case that
+        # used to render as a bare red "✗ FAIL" with nothing else on screen.
+        if ex.reason and ex.reason != "non-zero exit":
+            print("  " + c.dim("reason: ") + c.yellow(ex.reason))
+        if ex.stderr:
+            print()
+            print("  " + c.dim("stderr:"))
+            for line in ex.stderr.strip().splitlines()[-6:]:
+                print("    " + c.red(line))
 
     if show_retrieval and result.retrieved:
         print()

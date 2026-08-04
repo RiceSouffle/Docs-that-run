@@ -50,8 +50,12 @@ def _clamp(value: int, low: int, high: int) -> int:
 @dataclass(frozen=True)
 class Settings:
     # ---- LLM ----------------------------------------------------------------
-    model: str = "claude-opus-4-8"
+    model: str = "claude-opus-5"
     effort: str = "medium"
+    # Shared budget: adaptive thinking is on by default on this model and draws
+    # from max_tokens alongside the JSON answer, so too tight a cap truncates
+    # mid-object (stop_reason "max_tokens"). The answers themselves are short.
+    max_tokens: int = 8192
     llm_timeout_s: float = 60.0
     llm_max_retries: int = 2
 
@@ -122,6 +126,7 @@ class Settings:
         return cls(
             model=os.environ.get("DOCSTHATRUN_MODEL", cls.model),
             effort=os.environ.get("DOCSTHATRUN_EFFORT", cls.effort),
+            max_tokens=_clamp(_int("DOCSTHATRUN_MAX_TOKENS", cls.max_tokens), 1024, 64000),
             llm_timeout_s=max(1.0, _float("DOCSTHATRUN_LLM_TIMEOUT", cls.llm_timeout_s)),
             llm_max_retries=_clamp(_int("DOCSTHATRUN_LLM_RETRIES", cls.llm_max_retries), 0, 10),
             default_version=default_version,
