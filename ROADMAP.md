@@ -11,7 +11,16 @@ interviewer would probe.
   design with self-hosted fonts) + **terminal CLI** (`docsthatrun ask` /
   `compare`) + **`/compare` endpoint** — the version-lock is now something you
   can see, not just read about.
-- **Failure taxonomy + per-query latency** in the eval report (part of Milestone 1).
+- **Failure taxonomy + per-query latency** in the eval report (part of Milestone 1),
+  with answer latency and grade latency reported on separate axes.
+- **Sandbox containment** (v0.4.0): each grade runs in a throwaway working
+  directory with `''` scrubbed from `sys.path`, so a snippet can't import the
+  application's own packages and a stray `pydantic.py` can't shadow the pinned
+  one. Pins are now exact releases rather than major-version ranges, which is
+  what makes the published 17/25 reproducible.
+- **Eval-gate integrity** (v0.4.0): an unavailable sandbox version is a named
+  gate failure instead of a silent skip that discarded the healthy version's
+  results and still printed GATE PASSED.
 - **Robustness pass** (DECISIONS.md → Robustness & hardening): sandbox
   process-group isolation, graceful degradation on truncated/empty model output,
   a stricter CI gate, bounded API inputs — all pinned by regression tests.
