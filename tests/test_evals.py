@@ -30,12 +30,31 @@ def test_retrieval_only_meets_gate():
 
 
 def test_mock_answers_abstain_correctly():
-    # MockClient replays the answer key: answerable items don't abstain,
-    # unanswerable items do. This exercises the abstention plumbing.
+    # MockClient replays the answer key, so these two numbers are true by
+    # construction — this is a plumbing check (the abstention flag survives the
+    # whole answer path and reaches the report), not a quality claim. The real
+    # abstention behaviour is pinned by test_unknown_question_abstains below,
+    # which uses a client that has no fixture for the question at all.
     report = evaluate(run_answers=True, client_name="mock")
     answers = report["answers"]
     assert answers["unanswerable_abstention"] == 1.0
     assert answers["answerable_over_abstention"] == 0.0
+
+
+def test_unknown_question_abstains_rather_than_inventing_an_answer():
+    """MockClient({}) has no fixtures, so every question is unknown.
+
+    This is also the regression test for `fixtures or ...`: an explicitly empty
+    dict is falsy, so MockClient({}) silently loaded all 31 golden answers and
+    this test would have found a fixture for everything.
+    """
+    from docsthatrun.llm import MockClient
+
+    client = MockClient({})
+    assert client.fixtures == {}
+    out = client.generate("anything at all", "v2", [])
+    assert out["abstained"] is True
+    assert out["code"] == ""
 
 
 def test_report_includes_taxonomy_and_latency():

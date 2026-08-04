@@ -15,7 +15,7 @@ import pytest
 
 from docsthatrun.evals.run_evals import GATE, check_gate
 from docsthatrun.llm import _extract_json
-from docsthatrun.sandbox import grade, sandbox_available
+from docsthatrun.sandbox import grade
 
 # ---- LLM answer parsing (llm._extract_json) --------------------------------
 
@@ -111,8 +111,7 @@ def test_gate_fails_when_no_sandbox_at_all():
 
 # ---- Sandbox process-group isolation (sandbox.grade) -----------------------
 
-_SANDBOX = sandbox_available("v2")
-needs_sandbox = pytest.mark.skipif(not _SANDBOX, reason="sandbox venvs not set up")
+needs_sandbox = pytest.mark.usefixtures("require_sandbox")
 
 
 @needs_sandbox

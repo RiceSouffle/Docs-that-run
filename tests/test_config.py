@@ -51,3 +51,38 @@ def test_top_k_max_cannot_invert_the_range(monkeypatch):
     monkeypatch.setenv("DOCSTHATRUN_TOP_K_MAX", "0")
     s = Settings.from_env()
     assert s.top_k_max >= 1 and 1 <= s.top_k_default <= s.top_k_max
+
+
+# ---- validation added after the audit --------------------------------------
+
+
+def test_default_version_is_rejected_not_silently_accepted(monkeypatch):
+    """A typo here used to 400 every /ask that omitted `version` — a config
+    problem presenting as a client error, on every request."""
+    monkeypatch.setenv("DOCSTHATRUN_DEFAULT_VERSION", "v3")
+    with pytest.raises(ValueError, match="DOCSTHATRUN_DEFAULT_VERSION"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize(
+    "name,attr,bad,floor",
+    [
+        ("DOCSTHATRUN_SANDBOX_TIMEOUT", "sandbox_timeout_s", "0", 1),
+        ("DOCSTHATRUN_SANDBOX_TIMEOUT", "sandbox_timeout_s", "-5", 1),
+        ("DOCSTHATRUN_SANDBOX_CPU", "sandbox_cpu_seconds", "-1", 1),
+        ("DOCSTHATRUN_SANDBOX_FILE_MB", "sandbox_file_mb", "0", 1),
+        ("DOCSTHATRUN_SANDBOX_MEM_MB", "sandbox_memory_mb", "-1", 64),
+    ],
+)
+def test_sandbox_limits_are_clamped(monkeypatch, name, attr, bad, floor):
+    """These were the only knobs with no bounds, and the ones where a bad value
+    fails silently: timeout=0 made proc.wait() expire instantly so *every*
+    snippet reported "timed out", and a negative rlimit raised inside the
+    launcher's best-effort try/except, removing the limit altogether."""
+    monkeypatch.setenv(name, bad)
+    assert getattr(Settings.from_env(), attr) == floor
+
+
+def test_non_positive_cache_ttl_disables_rather_than_immortalises(monkeypatch):
+    monkeypatch.setenv("DOCSTHATRUN_CACHE_TTL", "-30")
+    assert Settings.from_env().cache_ttl_s == 0.0

@@ -1,19 +1,17 @@
 """HTTP API tests. Skipped when fastapi/httpx aren't installed (the core runs
 without them); CI installs requirements.txt so these run there."""
 
-import os
-
 import pytest
 
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-os.environ.setdefault("DOCSTHATRUN_LLM", "mock")  # no API key needed for tests
-os.environ.setdefault("DOCSTHATRUN_RATE_RPM", "0")  # deterministic: no rate limiting
-
+# The test environment (mock client, no rate limiting, no API key) is set in
+# tests/conftest.py, which pytest imports before any test module — early enough
+# for docsthatrun.config's import-time settings singleton to see it.
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.main import answer_cache, app  # noqa: E402
+from app.main import app  # noqa: E402
 
 client = TestClient(app)
 
@@ -47,12 +45,22 @@ def test_ask_rejects_out_of_range_top_k(bad):
     assert r.status_code == 422
 
 
-def test_ask_answerable_returns_cited_answer_and_grade():
+def test_ask_answerable_returns_cited_answer_and_grade(sandbox_ready):
     q = "In Pydantic v2, how do I serialize a model instance to a dictionary?"
     r = client.post("/ask", json={"question": q, "version": "v2"}).json()
     assert r["answer"]["abstained"] is False
     assert r["answer"]["citations"]  # at least one citation
     assert r["retrieved"] and r["retrieved"][0]["id"]
+    # Every cited id must be one that was actually retrieved — the grounding
+    # claim, checked rather than assumed.
+    retrieved_ids = {c["id"] for c in r["retrieved"]}
+    assert set(r["answer"]["citations"]) <= retrieved_ids
+    # The name promises a grade, so check for one. Without this the test passed
+    # with execution: null on any machine that hadn't built the venvs.
+    if not sandbox_ready:
+        pytest.skip("sandbox venvs not set up — cannot assert on the grade")
+    assert r["execution"]["available"] is True
+    assert r["execution"]["passed"] is True
 
 
 def test_compare_shows_both_versions():
@@ -65,12 +73,16 @@ def test_compare_shows_both_versions():
 
 
 def test_response_has_meta_and_second_call_is_cached():
-    answer_cache.clear()
     q = {"question": "In Pydantic v2, how do I generate a JSON schema for a model?", "version": "v2"}
     r1 = client.post("/ask", json=q).json()
     assert r1["meta"]["cached"] is False and "latency_ms" in r1["meta"]
     r2 = client.post("/ask", json=q).json()
     assert r2["meta"]["cached"] is True
+    # latency_ms describes THIS response, so a cache hit must be much faster
+    # than the original; the original is kept under its own name. The UI used
+    # to print the uncached figure next to the word "cached".
+    assert r2["meta"]["latency_ms"] < r1["meta"]["latency_ms"]
+    assert r2["meta"]["uncached_latency_ms"] == r1["meta"]["latency_ms"]
 
 
 def test_security_headers_present():
@@ -110,7 +122,6 @@ def test_docs_page_csp_allows_its_cdn_but_other_routes_do_not():
 def test_cached_response_echoes_the_callers_own_question():
     # The key was stripped but the payload stored the first caller's raw string,
     # so a later caller got a response quoting a question they never sent.
-    answer_cache.clear()
     q = "In Pydantic v2, how do I serialize a model instance to a dictionary?"
     client.post("/ask", json={"question": "   " + q + "   ", "version": "v2"})
     second = client.post("/ask", json={"question": q, "version": "v2"}).json()
@@ -166,3 +177,96 @@ def test_security_headers_on_unhandled_500(monkeypatch):
     assert r.headers["x-content-type-options"] == "nosniff"
     assert "content-security-policy" in r.headers
     assert "x-request-id" in r.headers
+
+
+# ---- rate limiting, exercised through HTTP ---------------------------------
+
+
+def test_rate_limit_returns_429_with_retry_after(monkeypatch):
+    """The limiter is unit-tested, but its *wiring* never was: the suite
+    disables rate limiting globally, so the 429 and the Retry-After header the
+    README advertises were never produced by a real request."""
+    import app.main as m
+    from docsthatrun.ratelimit import RateLimiter
+
+    monkeypatch.setattr(m, "limiter", RateLimiter(rpm=1, burst=1))
+    q = {"question": "In Pydantic v2, how do I serialize a model instance to a dictionary?", "version": "v2"}
+    assert client.post("/ask", json=q).status_code == 200
+    blocked = client.post("/ask", json=q)
+    assert blocked.status_code == 429
+    assert int(blocked.headers["retry-after"]) >= 1
+
+
+def test_malformed_bodies_are_rate_limited_too(monkeypatch):
+    """Validation runs before the handler, so a flood of 422s used to cost the
+    caller nothing. The limiter is a route dependency now, which runs first."""
+    import app.main as m
+    from docsthatrun.ratelimit import RateLimiter
+
+    monkeypatch.setattr(m, "limiter", RateLimiter(rpm=1, burst=1))
+    assert client.post("/ask", json={"bogus": 1}).status_code == 422
+    assert client.post("/ask", json={"bogus": 1}).status_code == 429
+
+
+def test_compare_costs_two_tokens_because_it_does_two_answers(monkeypatch):
+    import app.main as m
+    from docsthatrun.ratelimit import RateLimiter
+
+    monkeypatch.setattr(m, "limiter", RateLimiter(rpm=1, burst=2))
+    q = {"question": "In Pydantic v2, how do I serialize a model instance to a dictionary?"}
+    assert client.post("/compare", json=q).status_code == 200
+    assert client.post("/compare", json=q).status_code == 429
+
+
+@pytest.mark.parametrize("blank", ["   ", "\n\t ", ""])
+def test_blank_questions_are_rejected(blank):
+    """min_length ran against the raw body while the handler stripped
+    afterwards, so "   " validated and then became "" — a 200 answering an
+    empty question."""
+    r = client.post("/ask", json={"question": blank, "version": "v2"})
+    assert r.status_code == 422
+
+
+def test_ready_reports_503_and_a_reason_when_the_corpus_is_broken(monkeypatch):
+    """/ready exists to return 503 for exactly this; it used to 500 instead,
+    telling the probe 'broken in an unknown way' when the server knew."""
+    import app.main as m
+
+    def _boom():
+        raise ValueError("corpus.jsonl:7 duplicate chunk id 'c1'")
+
+    monkeypatch.setattr(m, "get_retriever", _boom)
+    r = client.get("/ready")
+    assert r.status_code == 503
+    assert r.json()["ready"] is False
+    assert "duplicate chunk id" in r.json()["detail"]
+
+
+def test_health_stays_up_when_the_client_cannot_be_built(monkeypatch):
+    """Liveness must not depend on anything that can fail — a bad
+    DOCSTHATRUN_LLM used to 500 the endpoint an orchestrator uses to decide
+    whether to restart the process."""
+    import app.main as m
+
+    def _boom():
+        raise ValueError("unknown client 'mokc'")
+
+    monkeypatch.setattr(m, "get_llm", _boom)
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json()["client"] == "unavailable"
+
+
+def test_upstream_failure_does_not_leak_exception_text(monkeypatch):
+    """SDK errors carry request URLs and account identifiers, and the UI renders
+    `detail` verbatim."""
+    import app.main as m
+
+    def _boom(*a, **k):
+        raise RuntimeError("connection to https://api.example/v1 failed for org_SECRET123")
+
+    monkeypatch.setattr(m, "_answer", _boom)
+    r = client.post("/ask", json={"question": "anything at all", "version": "v2"})
+    assert r.status_code == 502
+    assert "SECRET123" not in r.text and "api.example" not in r.text
+    assert "request id" in r.json()["detail"]

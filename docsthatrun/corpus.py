@@ -45,6 +45,12 @@ def load_corpus(path: str = DEFAULT_CORPUS_PATH) -> List[Chunk]:
                 # line, not the file — which sends you looking in the wrong
                 # place. Name the file and the real line number instead.
                 raise ValueError(f"{path}:{line_no} invalid JSON: {exc.msg} (at column {exc.colno})") from exc
+            if not isinstance(data, dict):
+                # A bare scalar or array is valid JSON, so it sailed past the
+                # handler above and then raised TypeError/AttributeError on the
+                # first subscript — skipping the file:line message this whole
+                # block exists to produce.
+                raise ValueError(f"{path}:{line_no} expected a JSON object, got {type(data).__name__}")
             try:
                 chunks.append(
                     Chunk(
@@ -56,7 +62,7 @@ def load_corpus(path: str = DEFAULT_CORPUS_PATH) -> List[Chunk]:
                         code=data.get("code", ""),
                     )
                 )
-            except KeyError as exc:  # pragma: no cover - corpus authoring guard
+            except KeyError as exc:
                 raise ValueError(f"{path}:{line_no} missing required field {exc}") from exc
     _validate(chunks, path)
     return chunks

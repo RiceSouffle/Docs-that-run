@@ -12,10 +12,12 @@ import time
 import pytest
 
 from docsthatrun.evals.run_evals import load_golden
-from docsthatrun.sandbox import grade, sandbox_available
+from docsthatrun.sandbox import grade
 
-_SANDBOX = sandbox_available("v1") and sandbox_available("v2")
-needs_sandbox = pytest.mark.skipif(not _SANDBOX, reason="sandbox venvs not set up")
+# A fixture, not a module-level probe: evaluating sandbox_available() at import
+# forked two subprocesses during *collection* and froze the skip decision before
+# any fixture could influence it.
+needs_sandbox = pytest.mark.usefixtures("require_sandbox")
 
 _OTHER = {"v1": "v2", "v2": "v1"}
 
