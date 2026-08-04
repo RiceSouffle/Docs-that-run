@@ -6,8 +6,9 @@
 #
 # Then open http://localhost:8000  (the interactive demo UI).
 #
-# Python is pinned to 3.11: pydantic 1.10.x builds cleanly there (needed for the
-# v1 sandbox), and RLIMIT_AS memory caps are enforced on Linux.
+# Python is pinned to 3.11: pydantic 1.10.x has wheels there (needed for the v1
+# sandbox), and RLIMIT_AS memory caps are enforced on Linux. setup_sandbox.sh
+# refuses anything outside 3.9-3.12 rather than failing inside a source build.
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -25,8 +26,9 @@ RUN pip install -r requirements-runtime.txt
 
 COPY . .
 
-# Build the pinned pydantic v1.x / v2.x sandbox venvs at image-build time so the
-# execution grader works out of the box with no runtime network.
+# Build the sandbox venvs at image-build time (pydantic 1.10.26 / 2.13.4, pinned
+# exactly in scripts/setup_sandbox.sh) so the execution grader works out of the
+# box with no runtime network.
 RUN bash scripts/setup_sandbox.sh
 
 # Drop privileges: the sandbox runs model-generated code, so the server process
